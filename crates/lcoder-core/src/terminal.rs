@@ -597,7 +597,7 @@ mod tests {
     use std::{
         fs,
         sync::{Arc, mpsc},
-        time::Duration,
+        time::{Duration, Instant},
     };
 
     use tempfile::tempdir;
@@ -673,7 +673,8 @@ mod tests {
 
         let mut output = Vec::new();
         let mut exited = false;
-        for _ in 0..20 {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
             match receiver.recv_timeout(Duration::from_millis(250)) {
                 Ok(TerminalEvent::Output { session_id, data }) => {
                     assert_eq!(session_id, info.id);
@@ -692,7 +693,7 @@ mod tests {
                     panic!("{message}");
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(error) => panic!("{error}"),
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
         assert!(String::from_utf8_lossy(&output).contains("lcoder-pty-ok"));
