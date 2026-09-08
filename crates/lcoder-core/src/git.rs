@@ -133,10 +133,7 @@ pub fn git_history(
     let output = run_git(&context, args, "Unable to read commit history")?;
     let mut fields = output.split(|byte| *byte == 0);
     let mut commits = Vec::new();
-    loop {
-        let Some(oid) = next_nonempty(&mut fields) else {
-            break;
-        };
+    while let Some(oid) = next_nonempty(&mut fields) {
         let short_oid = next_field(&mut fields, "short commit id")?;
         let parent_oids = next_field(&mut fields, "commit parents")?;
         let author = next_field(&mut fields, "commit author")?;
