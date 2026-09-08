@@ -13,9 +13,15 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::{DirectoryEntry, DirectoryPage, EntryKind, FileView, WatchState, WorkspaceSummary};
+use crate::{
+    DirectoryEntry, DirectoryPage, EntryKind, FileSearchMatch, FileSearchPage, FileView,
+    WatchState, WorkspaceSummary,
+};
 
 const MAX_DIRECTORY_PAGE_SIZE: usize = 500;
+const MAX_FILE_SEARCH_RESULTS: usize = 200;
+const MAX_FILE_SEARCH_SCAN_ENTRIES: usize = 100_000;
+const MAX_FILE_SEARCH_QUERY_BYTES: usize = 256;
 const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_RELATIVE_PATH_BYTES: usize = 32 * 1024;
 
@@ -240,6 +246,89 @@ impl WorkspaceRegistry {
         read_workspace_file(&workspace.root, relative_path)
     }
 
+    pub fn search_files(&self, id: &str, query: &str) -> Result<FileSearchPage, String> {
+        let workspace = self.get(id)?;
+        let query = query.trim();
+        if query.len() > MAX_FILE_SEARCH_QUERY_BYTES {
+            return Err(format!(
+                "File filter must be at most {MAX_FILE_SEARCH_QUERY_BYTES} bytes"
+            ));
+        }
+        let query = query.to_lowercase();
+        if query.is_empty() {
+            return Ok(FileSearchPage {
+                matches: Vec::new(),
+                truncated: false,
+            });
+        }
+
+        let mut matches = Vec::new();
+        let mut pending = vec![workspace.root.clone()];
+        let mut scanned = 0;
+        let mut truncated = false;
+        while let Some(directory) = pending.pop() {
+            let entries = match fs::read_dir(&directory) {
+                Ok(entries) => entries,
+                Err(_) => continue,
+            };
+            for result in entries {
+                let Ok(entry) = result else {
+                    continue;
+                };
+                if entry.file_name() == ".git" {
+                    continue;
+                }
+                scanned += 1;
+                if scanned > MAX_FILE_SEARCH_SCAN_ENTRIES {
+                    truncated = true;
+                    break;
+                }
+                let Ok(metadata) = fs::symlink_metadata(entry.path()) else {
+                    continue;
+                };
+                if metadata.file_type().is_symlink() {
+                    continue;
+                }
+                if metadata.is_dir() {
+                    if !is_search_ignored_directory(&entry.file_name()) {
+                        pending.push(entry.path());
+                    }
+                    continue;
+                }
+                if !metadata.is_file() {
+                    continue;
+                }
+                let entry_path = entry.path();
+                let Ok(relative) = entry_path.strip_prefix(&workspace.root) else {
+                    continue;
+                };
+                let Ok(path) = normalized_relative_text(relative) else {
+                    continue;
+                };
+                if path.to_lowercase().contains(&query) {
+                    matches.push(FileSearchMatch {
+                        name: entry.file_name().to_string_lossy().into_owned(),
+                        path,
+                    });
+                }
+            }
+            if truncated {
+                break;
+            }
+        }
+        matches.sort_by(|left, right| {
+            left.path
+                .to_lowercase()
+                .cmp(&right.path.to_lowercase())
+                .then_with(|| left.path.cmp(&right.path))
+        });
+        if matches.len() > MAX_FILE_SEARCH_RESULTS {
+            matches.truncate(MAX_FILE_SEARCH_RESULTS);
+            truncated = true;
+        }
+        Ok(FileSearchPage { matches, truncated })
+    }
+
     pub fn watch(&self, id: &str, after_revision: u64) -> Result<WatchState, String> {
         let workspace = self.get(id)?;
         let revision = workspace.revision.load(Ordering::Relaxed);
@@ -405,6 +494,13 @@ fn normalized_relative_text(path: &Path) -> Result<String, String> {
         .map(|parts| parts.join("/"))
 }
 
+fn is_search_ignored_directory(name: &std::ffi::OsStr) -> bool {
+    matches!(
+        name.to_str(),
+        Some(".git" | "node_modules" | "target" | "dist" | "build" | ".next")
+    )
+}
+
 const fn entry_rank(kind: EntryKind) -> u8 {
     match kind {
         EntryKind::Directory => 0,
@@ -454,5 +550,51 @@ mod tests {
             read_workspace_file(directory.path(), "binary").expect("read binary"),
             FileView::Unsupported { .. }
         ));
+    }
+
+    #[test]
+    fn searches_files_recursively_without_following_symlinks() {
+        let directory = tempdir().expect("tempdir");
+        fs::create_dir_all(directory.path().join("src/parser")).expect("create source");
+        fs::write(directory.path().join("src/parser/lexer.rs"), "lexer").expect("write lexer");
+        fs::write(directory.path().join("src/parser/syntax.rs"), "syntax").expect("write syntax");
+        fs::create_dir(directory.path().join(".git")).expect("create git directory");
+        fs::write(directory.path().join(".git/hidden.rs"), "hidden").expect("write hidden");
+        fs::create_dir(directory.path().join("target")).expect("create target directory");
+        fs::write(directory.path().join("target/lexer-cache.rs"), "cache")
+            .expect("write ignored cache");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            directory.path().join("src"),
+            directory.path().join("linked-src"),
+        )
+        .expect("create symlink");
+
+        let registry = WorkspaceRegistry::new(directory.path().join("config"));
+        let summary = registry.register(directory.path()).expect("register");
+        let result = registry
+            .search_files(&summary.id, "LEX")
+            .expect("search files");
+
+        assert_eq!(
+            result.matches,
+            vec![FileSearchMatch {
+                name: "lexer.rs".to_owned(),
+                path: "src/parser/lexer.rs".to_owned(),
+            }]
+        );
+        assert!(!result.truncated);
+        assert!(
+            registry
+                .search_files(&summary.id, "")
+                .expect("empty search")
+                .matches
+                .is_empty()
+        );
+        assert!(
+            registry
+                .search_files(&summary.id, &"x".repeat(257))
+                .is_err()
+        );
     }
 }

@@ -18,7 +18,9 @@ paths, executable discovery, process arguments, Git invocation, and PTY lifecycl
 
 ## Code browsing and review
 
-- Browse lazily reads directory pages and rejects symlink traversal.
+- Browse lazily reads directory pages and rejects symlink traversal. Its file
+  filter performs a bounded Rust-side recursive filename/path search so matches
+  can be found without first expanding every directory.
 - Working review compares `HEAD` with the current working tree.
 - History review compares a commit with its first parent; root commits use an empty baseline.
 - If a selected directory is nested inside a repository, Git results remain scoped to that

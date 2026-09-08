@@ -38,6 +38,20 @@ pub struct DirectoryPage {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileSearchMatch {
+    pub name: String,
+    pub path: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileSearchPage {
+    pub matches: Vec<FileSearchMatch>,
+    pub truncated: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum FileView {
     Text {

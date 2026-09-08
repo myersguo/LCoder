@@ -22,6 +22,16 @@ export interface DirectoryPage {
   warningCount: number;
 }
 
+export interface FileSearchMatch {
+  name: string;
+  path: string;
+}
+
+export interface FileSearchPage {
+  matches: FileSearchMatch[];
+  truncated: boolean;
+}
+
 export type FileView =
   | { kind: "text"; path: string; content: string; version: string }
   | { kind: "unsupported"; path: string; reason: string; size: number };

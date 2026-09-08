@@ -7,6 +7,7 @@ Monaco Editor, xterm.js, and `portable-pty`.
 
 - Open a local directory with the native picker.
 - Browse a lazy-loaded, read-only file tree.
+- Filter workspace files recursively or narrow the current Review change list.
 - Keep the currently active file visibly highlighted in Browse, Working
   Changes, and the matching History commit tree.
 - Read UTF-8 source in Monaco.

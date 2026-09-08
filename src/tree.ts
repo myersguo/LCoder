@@ -42,6 +42,16 @@ export function buildChangeTree(changes: GitChange[]): ChangeTreeNode[] {
   return root.children ?? [];
 }
 
+export function filterChanges(changes: GitChange[], query: string): GitChange[] {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) return changes;
+  return changes.filter(
+    (change) =>
+      change.path.toLowerCase().includes(normalized) ||
+      change.originalPath?.toLowerCase().includes(normalized)
+  );
+}
+
 function sortTree(nodes: ChangeTreeNode[]): void {
   nodes.sort(
     (left, right) =>

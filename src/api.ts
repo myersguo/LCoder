@@ -8,6 +8,7 @@ import {
   demoFile,
   demoProfiles,
   demoRepository,
+  demoSearchFiles,
   demoWorkingComparison,
   demoWorkspace
 } from "./demo-data";
@@ -16,6 +17,7 @@ import type {
   CommitPage,
   CommitSummary,
   DirectoryPage,
+  FileSearchPage,
   FileComparison,
   FileView,
   GitChange,
@@ -70,6 +72,15 @@ export async function readFile(workspaceId: string, path: string): Promise<FileV
   if (browserDemo) return demoFile(path);
   if (!desktop) throw new Error("File reading requires the LCoder desktop app.");
   return invoke("workspace_file", { request: { workspaceId, path } });
+}
+
+export async function searchFiles(
+  workspaceId: string,
+  query: string
+): Promise<FileSearchPage> {
+  if (browserDemo) return demoSearchFiles(query);
+  if (!desktop) throw new Error("File filtering requires the LCoder desktop app.");
+  return invoke("workspace_search_files", { workspaceId, query });
 }
 
 export async function watchWorkspace(

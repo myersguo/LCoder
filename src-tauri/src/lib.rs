@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use lcoder_core::{
     ChangePage, CommitFileRequest, CommitPage, CommitRequest, DirectoryPage, FileComparison,
-    FileView, PageRequest, RepositorySummary, TerminalController, TerminalEvent, TerminalInfo,
-    TerminalProfile, WatchState, WorkingFileRequest, WorkspacePathRequest, WorkspaceRegistry,
-    WorkspaceSummary, commit_changes, commit_file, git_history as read_git_history,
-    repository_summary, working_changes, working_file,
+    FileSearchPage, FileView, PageRequest, RepositorySummary, TerminalController, TerminalEvent,
+    TerminalInfo, TerminalProfile, WatchState, WorkingFileRequest, WorkspacePathRequest,
+    WorkspaceRegistry, WorkspaceSummary, commit_changes, commit_file,
+    git_history as read_git_history, repository_summary, working_changes, working_file,
 };
 use tauri::{AppHandle, Manager, State, ipc::Channel};
 use tauri_plugin_dialog::DialogExt;
@@ -76,6 +76,18 @@ async fn workspace_file(
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn workspace_search_files(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    query: String,
+) -> Result<FileSearchPage, String> {
+    let workspaces = Arc::clone(&state.workspaces);
+    tauri::async_runtime::spawn_blocking(move || workspaces.search_files(&workspace_id, &query))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -305,6 +317,7 @@ pub fn run() {
             workspace_recent,
             workspace_directory,
             workspace_file,
+            workspace_search_files,
             workspace_watch,
             workspace_set_trusted,
             git_repository,

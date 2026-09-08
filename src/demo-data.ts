@@ -2,6 +2,7 @@ import type {
   ChangePage,
   CommitPage,
   DirectoryPage,
+  FileSearchPage,
   FileComparison,
   FileView,
   RepositorySummary,
@@ -160,6 +161,21 @@ export const demoProfiles: TerminalProfile[] = [
 
 export function demoDirectory(path: string): DirectoryPage {
   return directories[path] ?? { entries: [], nextOffset: null, warningCount: 0 };
+}
+
+export function demoSearchFiles(query: string): FileSearchPage {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) return { matches: [], truncated: false };
+  return {
+    matches: Object.keys(files)
+      .filter((path) => path.toLowerCase().includes(normalized))
+      .sort((left, right) => left.localeCompare(right))
+      .map((path) => ({
+        name: path.split("/").at(-1) ?? path,
+        path
+      })),
+    truncated: false
+  };
 }
 
 export function demoFile(path: string): FileView {

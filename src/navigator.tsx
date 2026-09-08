@@ -10,22 +10,26 @@ import {
   FolderOpen,
   GitCommitHorizontal,
   LoaderCircle,
-  RefreshCw
+  RefreshCw,
+  Search,
+  X
 } from "lucide-react";
 
 import {
   listDirectory,
   readCommitChanges,
   readHistory,
-  readWorkingChanges
+  readWorkingChanges,
+  searchFiles
 } from "./api";
 import { resizePane } from "./layout";
 import { selectedBrowsePath, selectedReviewPath } from "./navigation-selection";
-import { buildChangeTree, type ChangeTreeNode } from "./tree";
+import { buildChangeTree, filterChanges, type ChangeTreeNode } from "./tree";
 import type {
   CommitSummary,
   DirectoryEntry,
   DocumentTab,
+  FileSearchMatch,
   GitChange,
   RepositorySummary,
   WorkspaceSummary
@@ -137,9 +141,15 @@ function DirectoryBrowser({
   const [loadingPaths, setLoadingPaths] = useState<Set<string>>(new Set([""]));
   const [error, setError] = useState<string | null>(null);
   const [treeHeight, setTreeHeight] = useState(() => Math.max(100, window.innerHeight - 120));
+  const [filter, setFilter] = useState("");
+  const [searchMatches, setSearchMatches] = useState<FileSearchMatch[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [searchTruncated, setSearchTruncated] = useState(false);
   const loadGeneration = useRef(0);
   const loadingRequests = useRef(new Map<string, number>());
+  const searchGeneration = useRef(0);
   const activePath = selectedBrowsePath(activeTab);
+  const normalizedFilter = filter.trim();
 
   const loadDirectory = useCallback(
     async (path: string, offset = 0) => {
@@ -201,6 +211,37 @@ function DirectoryBrowser({
   }, [loadDirectory, revision, workspace.name]);
 
   useEffect(() => {
+    const generation = ++searchGeneration.current;
+    if (!normalizedFilter) {
+      setSearchMatches([]);
+      setSearchTruncated(false);
+      setSearching(false);
+      return;
+    }
+    setSearchMatches([]);
+    setSearchTruncated(false);
+    setSearching(true);
+    const timer = window.setTimeout(() => {
+      void searchFiles(workspace.id, normalizedFilter)
+        .then((page) => {
+          if (generation !== searchGeneration.current) return;
+          setSearchMatches(page.matches);
+          setSearchTruncated(page.truncated);
+          setError(null);
+        })
+        .catch((reason: unknown) => {
+          if (generation === searchGeneration.current) {
+            setError(reason instanceof Error ? reason.message : String(reason));
+          }
+        })
+        .finally(() => {
+          if (generation === searchGeneration.current) setSearching(false);
+        });
+    }, 140);
+    return () => window.clearTimeout(timer);
+  }, [normalizedFilter, revision, workspace.id]);
+
+  useEffect(() => {
     const update = () => setTreeHeight(Math.max(100, window.innerHeight - 120));
     window.addEventListener("resize", update);
     return () => window.removeEventListener("resize", update);
@@ -209,60 +250,138 @@ function DirectoryBrowser({
   return (
     <div className="navigator">
       <PanelHeader eyebrow="WORKSPACE" title={workspace.name} />
+      <FileFilter value={filter} onChange={setFilter} />
       {error ? <TreeNote depth={0} text={error} /> : null}
       <div className="tree-scroll">
-        <Tree<FileTreeNode>
-          aria-label="Workspace files"
-          data={nodes}
-          disableDrag
-          disableDrop
-          disableMultiSelection
-          height={treeHeight}
-          idAccessor="id"
-          indent={15}
-          initialOpenState={{ "workspace-root": true }}
-          onActivate={(node) => {
-            if (
-              node.data.kind === "loadMore" &&
-              node.data.parentPath !== undefined &&
-              node.data.offset !== undefined
-            ) {
-              void loadDirectory(node.data.parentPath, node.data.offset);
-              return;
-            }
-            if (node.data.kind === "file" && node.data.path) {
-              onOpen({
-                id: `file:${node.data.path}`,
-                kind: "file",
-                path: node.data.path,
-                title: node.data.name
-              });
-            } else if (node.data.kind === "directory") {
-              node.toggle();
-            }
-          }}
-          onToggle={(id) => {
-            const node = findFileNode(nodes, id);
-            if (node?.kind === "directory" && node.path !== null && node.children?.length === 0) {
-              void loadDirectory(node.path);
-            }
-          }}
-          openByDefault={false}
-          overscanCount={8}
-          paddingBottom={18}
-          rowHeight={30}
-          width="100%"
-        >
-          {(props) => (
-            <FileNodeRow
-              {...props}
-              current={props.node.data.path === activePath}
-              loading={loadingPaths.has(props.node.data.path ?? "")}
-            />
-          )}
-        </Tree>
+        {normalizedFilter ? (
+          <FileSearchResults
+            activePath={activePath}
+            matches={searchMatches}
+            onOpen={onOpen}
+            searching={searching}
+            truncated={searchTruncated}
+          />
+        ) : (
+          <Tree<FileTreeNode>
+            aria-label="Workspace files"
+            data={nodes}
+            disableDrag
+            disableDrop
+            disableMultiSelection
+            height={treeHeight}
+            idAccessor="id"
+            indent={15}
+            initialOpenState={{ "workspace-root": true }}
+            onActivate={(node) => {
+              if (
+                node.data.kind === "loadMore" &&
+                node.data.parentPath !== undefined &&
+                node.data.offset !== undefined
+              ) {
+                void loadDirectory(node.data.parentPath, node.data.offset);
+                return;
+              }
+              if (node.data.kind === "file" && node.data.path) {
+                onOpen(fileTab(node.data.name, node.data.path));
+              } else if (node.data.kind === "directory") {
+                node.toggle();
+              }
+            }}
+            onToggle={(id) => {
+              const node = findFileNode(nodes, id);
+              if (node?.kind === "directory" && node.path !== null && node.children?.length === 0) {
+                void loadDirectory(node.path);
+              }
+            }}
+            openByDefault={false}
+            overscanCount={8}
+            paddingBottom={18}
+            rowHeight={30}
+            width="100%"
+          >
+            {(props) => (
+              <FileNodeRow
+                {...props}
+                current={props.node.data.path === activePath}
+                loading={loadingPaths.has(props.node.data.path ?? "")}
+              />
+            )}
+          </Tree>
+        )}
       </div>
     </div>
+  );
+}
+
+function FileSearchResults({
+  activePath,
+  matches,
+  onOpen,
+  searching,
+  truncated
+}: {
+  activePath: string | null;
+  matches: FileSearchMatch[];
+  onOpen: (tab: DocumentTab) => void;
+  searching: boolean;
+  truncated: boolean;
+}) {
+  if (searching) return <TreeNote depth={0} text="Filtering files…" loading />;
+  if (matches.length === 0) {
+    return <div className="filter-empty">No matching files</div>;
+  }
+  return (
+    <div aria-label="Filtered workspace files" className="file-filter-results">
+      {matches.map((match) => (
+        <button
+          aria-current={match.path === activePath ? "page" : undefined}
+          className={`file-filter-result ${match.path === activePath ? "current-file" : ""}`}
+          key={match.path}
+          onClick={() => onOpen(fileTab(match.name, match.path))}
+          type="button"
+        >
+          <File size={13} />
+          <span>
+            <strong>{match.name}</strong>
+            <small>{match.path}</small>
+          </span>
+        </button>
+      ))}
+      {truncated ? <div className="filter-limit">Showing the first 200 matches</div> : null}
+    </div>
+  );
+}
+
+function fileTab(name: string, path: string): DocumentTab {
+  return { id: `file:${path}`, kind: "file", path, title: name };
+}
+
+function FileFilter({
+  value,
+  onChange
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="file-filter">
+      <Search size={13} />
+      <input
+        aria-label="Filter files"
+        autoComplete="off"
+        maxLength={256}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder="Filter files"
+        spellCheck={false}
+        type="search"
+        value={value}
+      />
+      {value ? (
+        <button aria-label="Clear file filter" onClick={() => onChange("")} type="button">
+          <X size={12} />
+        </button>
+      ) : null}
+    </label>
   );
 }
 
@@ -339,6 +458,7 @@ function ReviewBrowser({
   const [loadingHistoryPage, setLoadingHistoryPage] = useState(false);
   const [loadingChangesPage, setLoadingChangesPage] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState("");
   const [windowHeight, setWindowHeight] = useState(() => window.innerHeight);
   const [historyHeight, setHistoryHeight] = useState(() =>
     resizePane(
@@ -348,7 +468,8 @@ function ReviewBrowser({
       maxHistoryHeight()
     )
   );
-  const tree = useMemo(() => buildChangeTree(changes), [changes]);
+  const filteredChanges = useMemo(() => filterChanges(changes, filter), [changes, filter]);
+  const tree = useMemo(() => buildChangeTree(filteredChanges), [filteredChanges]);
   const activePath = selectedReviewPath(
     activeTab,
     view,
@@ -466,6 +587,7 @@ function ReviewBrowser({
           History
         </button>
       </div>
+      <FileFilter value={filter} onChange={setFilter} />
 
       {view === "history" ? (
         <>
@@ -535,7 +657,9 @@ function ReviewBrowser({
 
       <div className="changes-header">
         <span>{view === "working" ? "WORKING TREE" : selectedCommit?.shortOid ?? "COMMIT"}</span>
-        <span>{changes.length} FILES</span>
+        <span>
+          {filter.trim() ? `${filteredChanges.length} / ${changes.length}` : changes.length} FILES
+        </span>
       </div>
       <div className="tree-scroll review-tree">
         {loading ? <TreeNote depth={0} text="Reading Git…" loading /> : null}
@@ -543,7 +667,7 @@ function ReviewBrowser({
         {!loading && !error && tree.length === 0 ? (
           <div className="navigator-empty compact">
             <RefreshCw size={18} />
-            <p>No changes in this scope.</p>
+            <p>{filter.trim() ? "No matching changed files." : "No changes in this scope."}</p>
           </div>
         ) : null}
         {tree.length ? (

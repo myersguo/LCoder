@@ -30,6 +30,15 @@ with sync_playwright() as playwright:
     page.reload()
     page.wait_for_load_state("networkidle")
 
+    file_filter = page.get_by_role("searchbox", name="Filter files")
+    file_filter.fill("syntax")
+    filtered_file = page.get_by_role("button", name="syntax.rs src/parser/syntax.rs")
+    filtered_file.wait_for()
+    filtered_file.click()
+    page.wait_for_selector(".monaco-editor")
+    assert page.locator(".tree-row.current-file", has_text="syntax.rs").is_visible()
+    page.get_by_role("button", name="Clear file filter").click()
+
     page.get_by_role("treeitem", name="src").click()
     page.wait_for_timeout(150)
     page.get_by_role("treeitem", name="lib.rs").click()
@@ -103,7 +112,11 @@ with sync_playwright() as playwright:
     page.get_by_text("L1–L6", exact=True).wait_for()
 
     page.get_by_role("button", name="Review").click()
+    review_filter = page.get_by_role("searchbox", name="Filter files")
+    review_filter.fill("lexer")
+    assert page.get_by_text("1 / 3 FILES", exact=True).is_visible()
     page.get_by_role("treeitem", name="lexer.rs").click()
+    page.get_by_role("button", name="Clear file filter").click()
     page.wait_for_selector(".monaco-diff-editor")
     working_current = page.locator(".tree-row.current-file", has_text="lexer.rs")
     assert working_current.is_visible()
