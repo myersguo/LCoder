@@ -35,7 +35,7 @@ asset_base="https://github.com/$REPO/releases/download/$tag"
 workdir=$(mktemp -d /tmp/lcoder-install.XXXXXX)
 trap 'rm -rf "$workdir"' EXIT
 
-echo "Downloading LCoder $version…"
+echo "Downloading LCoder ${version}…"
 curl -fsSL -o "$workdir/SHA256SUMS" "$asset_base/SHA256SUMS" \
   || fail "release $tag has no SHA256SUMS asset"
 curl -fSL --progress-bar -o "$workdir/$zip_name" "$asset_base/$zip_name"
