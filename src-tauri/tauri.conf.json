@@ -37,6 +37,9 @@
       "icons/icon.ico"
     ],
     "category": "DeveloperTool",
-    "shortDescription": "A focused local code and Git review workbench"
+    "shortDescription": "A focused local code and Git review workbench",
+    "macOS": {
+      "minimumSystemVersion": "13.0"
+    }
   }
 }

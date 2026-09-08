@@ -19,6 +19,31 @@ Monaco Editor, xterm.js, and `portable-pty`.
 - Refresh files and Git state when the workspace changes.
 - Keep browsing safe until the user explicitly trusts the workspace for command execution.
 
+## Install
+
+macOS Apple Silicon:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/myersguo/LCoder/main/install.sh | bash
+```
+
+The script downloads the latest release, verifies it against the published `SHA256SUMS`, installs
+`LCoder.app` in `/Applications`, and launches it. Or install with Homebrew:
+
+```bash
+brew install --cask myersguo/tap/lcoder
+```
+
+Current builds are ad-hoc signed but not Developer ID signed or notarized. If Homebrew leaves the
+download quarantined and macOS blocks first launch, clear quarantine for LCoder only:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/LCoder.app"
+```
+
+Manual downloads and checksums are available on the
+[Releases](https://github.com/myersguo/LCoder/releases) page.
+
 ## Supported platform
 
 - macOS 13+ on Apple Silicon is the supported V1 target.
