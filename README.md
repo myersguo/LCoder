@@ -12,9 +12,8 @@ Monaco Editor, xterm.js, and `portable-pty`.
 - Read UTF-8 source in Monaco.
 - Review the current `HEAD → working tree` change set.
 - Browse commit history and first-parent commit diffs.
-- Right-click a file or either side of a diff: the menu explains selected code
-  when present, or the corresponding entire file/version with an empty
-  selection.
+- Right-click a file or either side of a diff to explain or review selected
+  code; with no selection, the action targets the exact entire file/version.
 - Run Shell, Codex, Claude Code, or TraeX in a real embedded PTY.
 - Refresh files and Git state when the workspace changes.
 - Keep browsing safe until the user explicitly trusts the workspace for command execution.

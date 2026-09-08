@@ -37,6 +37,34 @@ with sync_playwright() as playwright:
     browse_current = page.locator(".tree-row.current-file", has_text="lib.rs")
     assert browse_current.is_visible()
     assert browse_current.get_attribute("aria-current") == "page"
+    editor = page.locator(".monaco-editor")
+    editor.click(position={"x": 150, "y": 90})
+    page.keyboard.press("ControlOrMeta+A")
+    editor_box = editor.bounding_box()
+    page.mouse.click(
+        editor_box["x"] + 150,
+        editor_box["y"] + 90,
+        button="right",
+    )
+    assert page.get_by_role("menuitem", name="AI: Explain Selection").is_visible()
+    assert page.get_by_role("menuitem", name="AI: Review Selection").is_visible()
+    page.keyboard.press("Escape")
+    page.keyboard.press("Escape")
+    editor.click(position={"x": 150, "y": 90})
+    editor_box = editor.bounding_box()
+    page.mouse.click(
+        editor_box["x"] + 150,
+        editor_box["y"] + 90,
+        button="right",
+    )
+    assert page.get_by_role("menuitem", name="AI: Explain Entire File").is_visible()
+    assert page.get_by_role("menuitem", name="AI: Review Entire File").is_visible()
+    page.get_by_role("menuitem", name="AI: Review Entire File").click()
+    page.get_by_role("dialog").wait_for()
+    page.get_by_role("button", name="Trust & continue").click()
+    page.get_by_text("RUNNING").wait_for()
+    page.get_by_text("Review sent", exact=False).wait_for()
+    page.get_by_text("Entire file", exact=True).wait_for()
     navigator_width = page.locator(".left-panel").bounding_box()["width"]
     navigator_resizer = page.get_by_role("separator", name="Resize navigator")
     navigator_resizer_box = navigator_resizer.bounding_box()
@@ -53,7 +81,6 @@ with sync_playwright() as playwright:
     assert resized_navigator_width > navigator_width + 50
     assert float(page.evaluate("localStorage.getItem('lcoder.left-width')")) == resized_navigator_width
 
-    editor = page.locator(".monaco-editor")
     editor.click(position={"x": 150, "y": 90})
     page.mouse.click(
         editor.bounding_box()["x"] + 150,
@@ -61,10 +88,7 @@ with sync_playwright() as playwright:
         button="right",
     )
     page.get_by_role("menuitem", name="AI: Explain Entire File").click()
-    page.get_by_role("dialog").wait_for()
-    page.get_by_role("button", name="Trust & continue").click()
-    page.get_by_text("RUNNING").wait_for()
-    page.get_by_text("Sent", exact=False).wait_for()
+    page.get_by_text("Explanation sent", exact=False).wait_for()
     page.get_by_text("Entire file", exact=True).wait_for()
     assert page.locator(".terminal-pane").evaluate(
         "(element) => getComputedStyle(element).backgroundColor"

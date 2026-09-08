@@ -9,6 +9,7 @@ import type { editor } from "monaco-editor";
 import {
   FileCode2,
   LoaderCircle,
+  ScanSearch,
   Sparkles,
   SplitSquareHorizontal,
   WrapText,
@@ -26,6 +27,7 @@ import {
 } from "./editor-models";
 import { entireFileRequest, readCodeSelection } from "./selection";
 import type {
+  AiCodeAction,
   CodeSelection,
   DocumentTab,
   FileComparison,
@@ -36,8 +38,8 @@ import type {
 interface EditorPaneProps {
   activeTabId: string | null;
   onActivate: (id: string) => void;
+  onAiAction: (action: AiCodeAction, selection: CodeSelection) => void;
   onClose: (id: string) => void;
-  onExplain: (selection: CodeSelection) => void;
   revision: number;
   tabs: DocumentTab[];
   theme: "dark" | "light";
@@ -63,8 +65,8 @@ const editorOptions = {
 export function EditorPane({
   activeTabId,
   onActivate,
+  onAiAction,
   onClose,
-  onExplain,
   revision,
   tabs,
   theme,
@@ -118,10 +120,10 @@ export function EditorPane({
       const explainSelection = () => {
         captureSelectionValue(editorInstance, side);
         const selected = readCodeSelection(editorInstance, tab, language, side);
-        if (selected) onExplain(selected);
+        if (selected) onAiAction("explain", selected);
       };
       const explainEntireFile = () => {
-        onExplain(entireFileRequest(editorInstance, tab, language, side));
+        onAiAction("explain", entireFileRequest(editorInstance, tab, language, side));
       };
       const editorNode = editorInstance.getDomNode();
       const openContextMenu = (event: MouseEvent) => {
@@ -132,7 +134,7 @@ export function EditorPane({
         setSelection(selected);
         setContextMenu({
           x: Math.min(event.clientX, window.innerWidth - 230),
-          y: Math.min(event.clientY, window.innerHeight - 52),
+          y: Math.min(event.clientY, window.innerHeight - 92),
           request:
             selected ?? entireFileRequest(editorInstance, tab, language, side)
         });
@@ -173,7 +175,7 @@ export function EditorPane({
       setActiveEditor({ instance: editorInstance, side });
       captureSelectionValue(editorInstance, side);
     },
-    [captureSelectionValue, language, onExplain, tab]
+    [captureSelectionValue, language, onAiAction, tab]
   );
 
   const mountEditor = useCallback<OnMount>(
@@ -429,7 +431,7 @@ export function EditorPane({
           >
             <button
               onClick={() => {
-                onExplain(contextMenu.request);
+                onAiAction("explain", contextMenu.request);
                 setContextMenu(null);
               }}
               role="menuitem"
@@ -440,6 +442,19 @@ export function EditorPane({
                 ? "AI: Explain Selection"
                 : "AI: Explain Entire File"}
               <kbd>⌘⇧E</kbd>
+            </button>
+            <button
+              onClick={() => {
+                onAiAction("review", contextMenu.request);
+                setContextMenu(null);
+              }}
+              role="menuitem"
+              type="button"
+            >
+              <ScanSearch size={14} />
+              {contextMenu.request.scope === "selection"
+                ? "AI: Review Selection"
+                : "AI: Review Entire File"}
             </button>
           </div>
         ) : null}
@@ -455,7 +470,8 @@ export function EditorPane({
           className="explain-selection-button"
           onClick={() => {
             if (!tab || !activeEditor) return;
-            onExplain(
+            onAiAction(
+              "explain",
               selection ??
                 entireFileRequest(
                   activeEditor.instance,

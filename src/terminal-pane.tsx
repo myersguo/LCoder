@@ -25,9 +25,9 @@ import {
   stopTerminal,
   writeTerminal
 } from "./api";
-import { buildExplainPrompt } from "./explain-selection";
+import { buildAiCodePrompt } from "./explain-selection";
 import type {
-  ExplainRequest,
+  AiCodeRequest,
   TerminalInfo,
   TerminalProfile,
   WorkspaceSummary
@@ -80,7 +80,7 @@ const DARK_TERMINAL_THEME = {
 };
 
 interface TerminalPaneProps {
-  explainRequest: ExplainRequest | null;
+  aiCodeRequest: AiCodeRequest | null;
   onRunningChange: (running: boolean) => void;
   onWorkspaceChange: (workspace: WorkspaceSummary) => void;
   theme: "dark" | "light";
@@ -88,7 +88,7 @@ interface TerminalPaneProps {
 }
 
 export const TerminalPane = memo(function TerminalPane({
-  explainRequest,
+  aiCodeRequest,
   onRunningChange,
   onWorkspaceChange,
   theme,
@@ -101,9 +101,9 @@ export const TerminalPane = memo(function TerminalPane({
   const [error, setError] = useState<string | null>(null);
   const [trustOpen, setTrustOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
-  const [pendingExplain, setPendingExplain] = useState<ExplainRequest | null>(null);
-  const [explainContext, setExplainContext] = useState<{
-    request: ExplainRequest;
+  const [pendingAiRequest, setPendingAiRequest] = useState<AiCodeRequest | null>(null);
+  const [aiCodeContext, setAiCodeContext] = useState<{
+    request: AiCodeRequest;
     status: "queued" | "sent";
   } | null>(null);
   const container = useRef<HTMLDivElement>(null);
@@ -111,8 +111,8 @@ export const TerminalPane = memo(function TerminalPane({
   const fitAddon = useRef<FitAddon | null>(null);
   const sessionId = useRef<string | null>(null);
   const launchGeneration = useRef(0);
-  const handledExplainId = useRef(0);
-  const sendingExplainId = useRef(0);
+  const handledAiRequestId = useRef(0);
+  const sendingAiRequestId = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -195,18 +195,18 @@ export const TerminalPane = memo(function TerminalPane({
     profiles.find((profile) => profile.id === profileId) ??
     profiles.find((profile) => profile.available);
 
-  const sendPrompt = useCallback(async (info: TerminalInfo, request: ExplainRequest) => {
-    if (!terminal.current || sendingExplainId.current === request.id) return;
-    sendingExplainId.current = request.id;
+  const sendPrompt = useCallback(async (info: TerminalInfo, request: AiCodeRequest) => {
+    if (!terminal.current || sendingAiRequestId.current === request.id) return;
+    sendingAiRequestId.current = request.id;
     try {
       terminal.current.scrollToBottom();
       terminal.current.focus();
-      const input = `\u001b[200~${buildExplainPrompt(request.selection)}\u001b[201~\r`;
+      const input = `\u001b[200~${buildAiCodePrompt(request.action, request.selection)}\u001b[201~\r`;
       await writeTerminal(info.id, new TextEncoder().encode(input));
-      setPendingExplain(null);
-      setExplainContext({ request, status: "sent" });
+      setPendingAiRequest(null);
+      setAiCodeContext({ request, status: "sent" });
     } catch (reason) {
-      sendingExplainId.current = 0;
+      sendingAiRequestId.current = 0;
       throw reason;
     }
   }, []);
@@ -290,29 +290,29 @@ export const TerminalPane = memo(function TerminalPane({
   };
 
   useEffect(() => {
-    if (!explainRequest || explainRequest.id <= handledExplainId.current) return;
-    handledExplainId.current = explainRequest.id;
-    setPendingExplain(explainRequest);
-    setExplainContext({ request: explainRequest, status: "queued" });
+    if (!aiCodeRequest || aiCodeRequest.id <= handledAiRequestId.current) return;
+    handledAiRequestId.current = aiCodeRequest.id;
+    setPendingAiRequest(aiCodeRequest);
+    setAiCodeContext({ request: aiCodeRequest, status: "queued" });
     setError(null);
-  }, [explainRequest]);
+  }, [aiCodeRequest]);
 
   useEffect(() => {
-    if (!pendingExplain) return;
+    if (!pendingAiRequest) return;
     if (!workspace) {
-      setError("Open a workspace before explaining code.");
+      setError("Open a workspace before using an AI code action.");
       return;
     }
 
     if (session && session.profileId !== "shell") {
-      void sendPrompt(session, pendingExplain).catch((reason: unknown) => {
+      void sendPrompt(session, pendingAiRequest).catch((reason: unknown) => {
         setError(reason instanceof Error ? reason.message : String(reason));
       });
       return;
     }
 
     if (session?.profileId === "shell") {
-      setError("Stop the Shell terminal, choose an AI runtime, then explain the selection.");
+      setError("Stop the Shell terminal, choose an AI runtime, then use the code action.");
       return;
     }
 
@@ -323,7 +323,7 @@ export const TerminalPane = memo(function TerminalPane({
       selectedAiProfile ??
       profiles.find((profile) => profile.available && profile.id !== "shell");
     if (!aiProfile) {
-      setError("Install or configure Codex, Claude Code, or TraeX to explain code.");
+      setError("Install or configure Codex, Claude Code, or TraeX to use AI code actions.");
       return;
     }
     if (profileId !== aiProfile.id) {
@@ -337,7 +337,7 @@ export const TerminalPane = memo(function TerminalPane({
     void launchFor(workspace);
   }, [
     launchFor,
-    pendingExplain,
+    pendingAiRequest,
     profileId,
     profiles,
     sendPrompt,
@@ -453,16 +453,17 @@ export const TerminalPane = memo(function TerminalPane({
         <code>{workspace?.path ?? "No workspace selected"}</code>
       </div>
 
-      {explainContext ? (
-        <div className="terminal-context" data-status={explainContext.status}>
+      {aiCodeContext ? (
+        <div className="terminal-context" data-status={aiCodeContext.status}>
           <Sparkles size={13} />
           <span>
-            {explainContext.status === "sent" ? "Sent" : "Queued"} ·{" "}
-            <strong>{explainContext.request.selection.path}</strong>
+            {aiCodeContext.request.action === "review" ? "Review" : "Explanation"}{" "}
+            {aiCodeContext.status === "sent" ? "sent" : "queued"} ·{" "}
+            <strong>{aiCodeContext.request.selection.path}</strong>
             <small>
-              {explainContext.request.selection.scope === "file"
+              {aiCodeContext.request.selection.scope === "file"
                 ? "Entire file"
-                : `L${explainContext.request.selection.startLine}–L${explainContext.request.selection.endLine}`}
+                : `L${aiCodeContext.request.selection.startLine}–L${aiCodeContext.request.selection.endLine}`}
             </small>
           </span>
         </div>
@@ -493,8 +494,8 @@ export const TerminalPane = memo(function TerminalPane({
                 className="secondary-button"
                 onClick={() => {
                   setTrustOpen(false);
-                  setPendingExplain(null);
-                  setExplainContext(null);
+                  setPendingAiRequest(null);
+                  setAiCodeContext(null);
                 }}
                 type="button"
               >
@@ -506,7 +507,7 @@ export const TerminalPane = memo(function TerminalPane({
                   void setWorkspaceTrusted(workspace.id, true).then((updated) => {
                     onWorkspaceChange(updated);
                     setTrustOpen(false);
-                    if (!pendingExplain) void launchFor(updated);
+                    if (!pendingAiRequest) void launchFor(updated);
                   }).catch((reason: unknown) => {
                     setError(reason instanceof Error ? reason.message : String(reason));
                   });

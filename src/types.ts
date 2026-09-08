@@ -133,8 +133,11 @@ export interface CodeSelection {
   truncated: boolean;
 }
 
-export interface ExplainRequest {
+export type AiCodeAction = "explain" | "review";
+
+export interface AiCodeRequest {
   id: number;
+  action: AiCodeAction;
   selection: CodeSelection;
 }
 

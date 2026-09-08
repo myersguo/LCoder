@@ -31,6 +31,11 @@ LCoder exposes fixed Shell, Codex, Claude Code, and TraeX profiles rather than r
 commands. Terminal processes run in a real PTY with bounded input and output flow control.
 Workspace trust is required before a process can start, and trust revocation stops owned sessions.
 
+Monaco AI actions reuse that PTY. Explain and Review share the same bounded selection or exact
+file-version context, but use separate prompts: Explain describes behavior, while Review asks only
+for actionable correctness, security, concurrency, lifecycle, performance, and maintainability
+findings.
+
 ## Deliberate V1 limits
 
 - macOS Apple Silicon is the tested platform.

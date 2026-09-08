@@ -24,9 +24,10 @@ import { resizePane } from "./layout";
 import { Navigator } from "./navigator";
 import { TerminalPane } from "./terminal-pane";
 import type {
+  AiCodeAction,
+  AiCodeRequest,
   CodeSelection,
   DocumentTab,
-  ExplainRequest,
   RepositorySummary,
   WorkspaceSummary
 } from "./types";
@@ -54,9 +55,9 @@ export function App() {
   );
   const [terminalRunning, setTerminalRunning] = useState(false);
   const [compactTerminalOpen, setCompactTerminalOpen] = useState(false);
-  const [explainRequest, setExplainRequest] = useState<ExplainRequest | null>(null);
+  const [aiCodeRequest, setAiCodeRequest] = useState<AiCodeRequest | null>(null);
   const revisionRef = useRef(0);
-  const explainRequestId = useRef(0);
+  const aiCodeRequestId = useRef(0);
   const workspaceSelectionGeneration = useRef(0);
 
   useEffect(() => {
@@ -140,7 +141,7 @@ export function App() {
       setWorkspace(selected);
       setTabs([]);
       setActiveTabId(null);
-      setExplainRequest(null);
+      setAiCodeRequest(null);
       revisionRef.current = 0;
       setRevision(0);
       setError(null);
@@ -177,10 +178,11 @@ export function App() {
     setRevision(next);
   };
 
-  const explainSelection = useCallback((selection: CodeSelection) => {
+  const requestAiAction = useCallback((action: AiCodeAction, selection: CodeSelection) => {
     setCompactTerminalOpen(true);
-    setExplainRequest({
-      id: ++explainRequestId.current,
+    setAiCodeRequest({
+      id: ++aiCodeRequestId.current,
+      action,
       selection
     });
   }, []);
@@ -326,7 +328,7 @@ export function App() {
               activeTabId={activeTabId}
               onActivate={setActiveTabId}
               onClose={closeTab}
-              onExplain={explainSelection}
+              onAiAction={requestAiAction}
               revision={revision}
               tabs={tabs}
               theme={theme}
@@ -347,7 +349,7 @@ export function App() {
           style={{ width: rightWidth }}
         >
           <TerminalPane
-            explainRequest={explainRequest}
+            aiCodeRequest={aiCodeRequest}
             key={workspace?.id ?? "no-workspace"}
             onRunningChange={setTerminalRunning}
             onWorkspaceChange={setWorkspace}

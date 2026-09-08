@@ -29,9 +29,10 @@ with the current user's permissions and may modify files.
 
 ## AI explanation
 
-Selected text is capped at 300 lines and 8 KiB, marked as untrusted source in the prompt, and only
-sent to Codex, Claude Code, or TraeX. With no selection, LCoder sends the validated relative path and
-exact file version reference instead of copying the entire file through IPC.
+Selected text for Explain or Review is capped at 300 lines and 8 KiB, marked as untrusted source in
+the prompt, and only sent to Codex, Claude Code, or TraeX. With no selection, LCoder sends the
+validated relative path and exact file version reference instead of copying the entire file through
+IPC.
 
 ## Reporting vulnerabilities
 
