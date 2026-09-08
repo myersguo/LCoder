@@ -1,0 +1,17 @@
+node_modules/
+.venv/
+__pycache__/
+dist/
+target/
+src-tauri/target/
+src-tauri/gen/
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+.DS_Store
+.env
+.env.*
+!.env.example
+*.log
+test-results/
+playwright-report/
