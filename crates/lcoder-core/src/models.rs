@@ -117,6 +117,31 @@ pub struct ChangePage {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct BranchSummary {
+    pub name: String,
+    pub current: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchComparison {
+    pub base: String,
+    pub head: String,
+    pub base_oid: String,
+    pub head_oid: String,
+    pub merge_base_oid: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchChangePage {
+    pub changes: Vec<GitChange>,
+    pub next_offset: Option<usize>,
+    pub comparison: BranchComparison,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CommitSummary {
     pub oid: String,
     pub short_oid: String,
@@ -226,5 +251,23 @@ pub struct CommitFileRequest {
 #[serde(rename_all = "camelCase")]
 pub struct WorkingFileRequest {
     pub workspace_id: String,
+    pub path: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchCompareRequest {
+    pub workspace_id: String,
+    pub base: String,
+    pub head: String,
+    pub offset: usize,
+    pub limit: usize,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchCompareFileRequest {
+    pub workspace_id: String,
+    pub comparison: BranchComparison,
     pub path: String,
 }

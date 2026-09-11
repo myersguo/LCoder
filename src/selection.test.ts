@@ -62,4 +62,36 @@ describe("codeSourceContext", () => {
       oid: "def456"
     });
   });
+
+  it("keeps branch comparison sides pinned to their resolved commits", () => {
+    const tab: DocumentTab = {
+      id: "branch:main...feature:src/file.ts",
+      kind: "branchDiff",
+      path: "src/file.ts",
+      title: "file.ts",
+      change: {
+        path: "src/file.ts",
+        originalPath: "src/old.ts",
+        staged: null,
+        unstaged: null,
+        status: "renamed"
+      },
+      comparison: {
+        base: "main",
+        head: "feature",
+        baseOid: "base",
+        headOid: "head",
+        mergeBaseOid: "merge-base"
+      }
+    };
+
+    expect(codeSourceContext(tab, "modified")).toEqual({
+      path: "src/file.ts",
+      sourceRef: { kind: "branch", branch: "feature", oid: "head" }
+    });
+    expect(codeSourceContext(tab, "original")).toEqual({
+      path: "src/old.ts",
+      sourceRef: { kind: "branch", branch: "main", oid: "merge-base" }
+    });
+  });
 });

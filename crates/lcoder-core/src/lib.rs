@@ -5,7 +5,8 @@ mod terminal;
 mod workspace;
 
 pub use git::{
-    commit_changes, commit_file, git_history, repository_summary, working_changes, working_file,
+    branch_changes, branch_file, branch_list, commit_changes, commit_file, git_history,
+    repository_summary, working_changes, working_file,
 };
 pub use models::*;
 pub use terminal::TerminalController;

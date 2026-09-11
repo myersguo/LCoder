@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
 use lcoder_core::{
-    ChangePage, CommitFileRequest, CommitPage, CommitRequest, DirectoryPage, FileComparison,
-    FileSearchPage, FileView, PageRequest, RepositorySummary, TerminalController, TerminalEvent,
-    TerminalInfo, TerminalProfile, WatchState, WorkingFileRequest, WorkspacePathRequest,
-    WorkspaceRegistry, WorkspaceSummary, commit_changes, commit_file,
-    git_history as read_git_history, repository_summary, working_changes, working_file,
+    BranchChangePage, BranchCompareFileRequest, BranchCompareRequest, BranchSummary, ChangePage,
+    CommitFileRequest, CommitPage, CommitRequest, DirectoryPage, FileComparison, FileSearchPage,
+    FileView, PageRequest, RepositorySummary, TerminalController, TerminalEvent, TerminalInfo,
+    TerminalProfile, WatchState, WorkingFileRequest, WorkspacePathRequest, WorkspaceRegistry,
+    WorkspaceSummary, branch_changes as read_branch_changes, branch_file as read_branch_file,
+    branch_list as read_branch_list, commit_changes, commit_file, git_history as read_git_history,
+    repository_summary, working_changes, working_file,
 };
 use tauri::{AppHandle, Manager, State, ipc::Channel};
 use tauri_plugin_dialog::DialogExt;
@@ -152,6 +154,47 @@ async fn git_working_file(
 ) -> Result<FileComparison, String> {
     let workspace = state.workspaces.get(&request.workspace_id)?;
     tauri::async_runtime::spawn_blocking(move || working_file(&workspace, &request.path))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn git_branches(
+    state: State<'_, AppState>,
+    workspace_id: String,
+) -> Result<Vec<BranchSummary>, String> {
+    let workspace = state.workspaces.get(&workspace_id)?;
+    tauri::async_runtime::spawn_blocking(move || read_branch_list(&workspace))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn git_branch_changes(
+    state: State<'_, AppState>,
+    request: BranchCompareRequest,
+) -> Result<BranchChangePage, String> {
+    let workspace = state.workspaces.get(&request.workspace_id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        read_branch_changes(
+            &workspace,
+            &request.base,
+            &request.head,
+            request.offset,
+            request.limit,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn git_branch_file(
+    state: State<'_, AppState>,
+    request: BranchCompareFileRequest,
+) -> Result<FileComparison, String> {
+    let workspace = state.workspaces.get(&request.workspace_id)?;
+    tauri::async_runtime::spawn_blocking(move || read_branch_file(&workspace, &request))
         .await
         .map_err(|error| error.to_string())?
 }
@@ -323,6 +366,9 @@ pub fn run() {
             git_repository,
             git_working_changes,
             git_working_file,
+            git_branches,
+            git_branch_changes,
+            git_branch_file,
             git_history,
             git_commit_changes,
             git_commit_file,

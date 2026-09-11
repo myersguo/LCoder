@@ -9,6 +9,12 @@ stopping terminals, and terminal startup is fenced by an epoch so concurrent rev
 Trust is a code-execution boundary, not a sandbox. A trusted Shell or AI CLI can execute commands
 with the current user's permissions and may modify files.
 
+AI terminal conversation state is isolated from each Agent's default
+Recent/resume store. Codex and TraeX receive a private short-lived state
+directory and Claude Code is started with transcript persistence disabled.
+Existing config/auth resources may still be read by the Agent; LCoder neither
+reads their contents nor mutates existing Agent session history.
+
 ## Renderer boundary
 
 - The renderer sends opaque workspace/profile IDs and validated relative paths.
@@ -22,6 +28,8 @@ with the current user's permissions and may modify files.
 - Text reads and diffs are size bounded; binary and non-UTF-8 content is not rendered.
 - Git uses machine-readable NUL-delimited output, literal pathspecs, bounded output/time, and
   read-only commands.
+- Branch comparison accepts local branch names, resolves them to commit IDs in
+  Rust, and revalidates those IDs before opening a branch diff file.
 - Ambient `GIT_*` variables are removed before Git execution, then LCoder adds only its own
   non-interactive safety variables.
 - Lazy fetching, external diff drivers, text conversion, replacement objects, prompts, and

@@ -4,8 +4,8 @@ use std::{
 };
 
 use crate::{
-    ChangePage, ChangeStatus, CommitPage, CommitSummary, FileComparison, GitChange,
-    RepositorySummary,
+    BranchChangePage, BranchCompareFileRequest, BranchComparison, BranchSummary, ChangePage,
+    ChangeStatus, CommitPage, CommitSummary, FileComparison, GitChange, RepositorySummary,
     process::{find_executable, run_bounded},
     workspace::{Workspace, read_workspace_bytes, safe_relative_path},
 };
@@ -102,6 +102,66 @@ pub fn working_file(workspace: &Workspace, relative_path: &str) -> Result<FileCo
         read_workspace_bytes(&workspace.root, &change.path)?
     };
     text_comparison(change, "HEAD → working tree", original, modified)
+}
+
+pub fn branch_list(workspace: &Workspace) -> Result<Vec<BranchSummary>, String> {
+    branch_list_from_context(&repository_context(workspace)?)
+}
+
+pub fn branch_changes(
+    workspace: &Workspace,
+    base: &str,
+    head: &str,
+    offset: usize,
+    limit: usize,
+) -> Result<BranchChangePage, String> {
+    validate_page(limit, MAX_PAGE_SIZE)?;
+    let context = repository_context(workspace)?;
+    let comparison = branch_comparison(&context, base, head)?;
+    let changes = read_branch_diff(&context, &comparison)?
+        .into_iter()
+        .map(|diff| diff.change)
+        .collect();
+    let page = page_changes(changes, offset, limit);
+    Ok(BranchChangePage {
+        changes: page.changes,
+        next_offset: page.next_offset,
+        comparison,
+    })
+}
+
+pub fn branch_file(
+    workspace: &Workspace,
+    request: &BranchCompareFileRequest,
+) -> Result<FileComparison, String> {
+    safe_relative_path(&request.path)?;
+    let context = repository_context(workspace)?;
+    verify_branch_comparison(&context, &request.comparison)?;
+    let diff = read_branch_diff(&context, &request.comparison)?
+        .into_iter()
+        .find(|diff| diff.change.path == request.path)
+        .ok_or_else(|| "The file is not part of this branch comparison".to_owned())?;
+    if diff.change.status == ChangeStatus::TypeChanged {
+        return Ok(unsupported_comparison(
+            &diff.change,
+            &branch_baseline(&request.comparison),
+            "Type changes are shown as metadata only",
+        ));
+    }
+    let original = match diff.old_oid {
+        Some(oid) => read_blob(&context, &oid)?,
+        None => Vec::new(),
+    };
+    let modified = match diff.new_oid {
+        Some(oid) => read_blob(&context, &oid)?,
+        None => Vec::new(),
+    };
+    text_comparison(
+        diff.change,
+        &branch_baseline(&request.comparison),
+        original,
+        modified,
+    )
 }
 
 pub fn git_history(
@@ -305,6 +365,8 @@ fn read_commit_diff(context: &RepositoryContext, oid: &str) -> Result<Vec<Parsed
             "--no-commit-id".into(),
             "--no-ext-diff".into(),
             "--no-textconv".into(),
+            "--full-index".into(),
+            "--abbrev=64".into(),
             "-M".into(),
             parent.clone().into(),
             oid.into(),
@@ -319,6 +381,8 @@ fn read_commit_diff(context: &RepositoryContext, oid: &str) -> Result<Vec<Parsed
             "--no-commit-id".into(),
             "--no-ext-diff".into(),
             "--no-textconv".into(),
+            "--full-index".into(),
+            "--abbrev=64".into(),
             "-M".into(),
             oid.into(),
         ]
@@ -326,6 +390,119 @@ fn read_commit_diff(context: &RepositoryContext, oid: &str) -> Result<Vec<Parsed
     push_scope(&mut args, &context.prefix);
     let output = run_git(context, args, "Unable to read commit changes")?;
     parse_raw_diff(&output, &context.prefix)
+}
+
+fn branch_comparison(
+    context: &RepositoryContext,
+    base: &str,
+    head: &str,
+) -> Result<BranchComparison, String> {
+    let branches = branch_list_from_context(context)?;
+    if !branches.iter().any(|branch| branch.name == base) {
+        return Err("Base branch was not found".to_owned());
+    }
+    if !branches.iter().any(|branch| branch.name == head) {
+        return Err("Head branch was not found".to_owned());
+    }
+    let base_oid = branch_oid(context, base)?;
+    let head_oid = branch_oid(context, head)?;
+    let merge_base_oid = git_text(context, &["merge-base", &base_oid, &head_oid])?;
+    validate_oid(&merge_base_oid)?;
+    Ok(BranchComparison {
+        base: base.to_owned(),
+        head: head.to_owned(),
+        base_oid,
+        head_oid,
+        merge_base_oid,
+    })
+}
+
+fn branch_list_from_context(context: &RepositoryContext) -> Result<Vec<BranchSummary>, String> {
+    let output = run_git(
+        context,
+        vec![
+            "for-each-ref".into(),
+            "--format=%(HEAD) %(refname:short)".into(),
+            "refs/heads".into(),
+        ],
+        "Unable to read Git branches",
+    )?;
+    let text = String::from_utf8(output)
+        .map_err(|_| "Git branch list returned non-UTF-8 text".to_owned())?;
+    let mut branches = text
+        .lines()
+        .filter(|line| line.len() >= 2)
+        .map(|line| BranchSummary {
+            current: line.as_bytes().first() == Some(&b'*'),
+            name: line[2..].to_owned(),
+        })
+        .collect::<Vec<_>>();
+    branches.sort_by(|left, right| {
+        right
+            .current
+            .cmp(&left.current)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    Ok(branches)
+}
+
+fn verify_branch_comparison(
+    context: &RepositoryContext,
+    comparison: &BranchComparison,
+) -> Result<(), String> {
+    validate_oid(&comparison.base_oid)?;
+    validate_oid(&comparison.head_oid)?;
+    validate_oid(&comparison.merge_base_oid)?;
+    let current = branch_comparison(context, &comparison.base, &comparison.head)?;
+    if current.base_oid == comparison.base_oid
+        && current.head_oid == comparison.head_oid
+        && current.merge_base_oid == comparison.merge_base_oid
+    {
+        Ok(())
+    } else {
+        Err("Branch comparison changed; refresh before opening this file".to_owned())
+    }
+}
+
+fn branch_oid(context: &RepositoryContext, branch: &str) -> Result<String, String> {
+    if branch.trim().is_empty() || branch.starts_with('-') || branch.contains('\0') {
+        return Err("Invalid branch name".to_owned());
+    }
+    let oid = git_text(
+        context,
+        &[
+            "rev-parse",
+            "--verify",
+            &format!("refs/heads/{branch}^{{commit}}"),
+        ],
+    )?;
+    validate_oid(&oid)?;
+    Ok(oid)
+}
+
+fn read_branch_diff(
+    context: &RepositoryContext,
+    comparison: &BranchComparison,
+) -> Result<Vec<ParsedDiff>, String> {
+    let mut args = vec![
+        "diff".into(),
+        "--raw".into(),
+        "-z".into(),
+        "--no-ext-diff".into(),
+        "--no-textconv".into(),
+        "--full-index".into(),
+        "--abbrev=64".into(),
+        "-M".into(),
+        comparison.merge_base_oid.clone().into(),
+        comparison.head_oid.clone().into(),
+    ];
+    push_scope(&mut args, &context.prefix);
+    let output = run_git(context, args, "Unable to read branch comparison")?;
+    parse_raw_diff(&output, &context.prefix)
+}
+
+fn branch_baseline(comparison: &BranchComparison) -> String {
+    format!("{}...{}", comparison.base, comparison.head)
 }
 
 fn parse_raw_diff(bytes: &[u8], prefix: &str) -> Result<Vec<ParsedDiff>, String> {
@@ -884,6 +1061,104 @@ mod tests {
                 && original.is_empty()
                 && modified == "feature\n"
         ));
+    }
+
+    #[test]
+    fn compares_branch_head_with_merge_base() {
+        let directory = tempdir().expect("tempdir");
+        git(directory.path(), &["init", "--initial-branch=main"]);
+        git(directory.path(), &["config", "user.name", "LCoder Test"]);
+        git(
+            directory.path(),
+            &["config", "user.email", "lcoder@example.invalid"],
+        );
+        fs::write(directory.path().join("shared.txt"), "base\n").expect("write shared");
+        fs::write(directory.path().join("main-only.txt"), "base\n").expect("write main-only");
+        git(directory.path(), &["add", "."]);
+        git(directory.path(), &["commit", "-m", "base"]);
+        git(directory.path(), &["checkout", "-b", "feature_a"]);
+        fs::write(directory.path().join("shared.txt"), "feature\n").expect("write feature");
+        fs::write(directory.path().join("feature.txt"), "feature\n").expect("write feature file");
+        git(directory.path(), &["add", "."]);
+        git(directory.path(), &["commit", "-m", "feature"]);
+        git(directory.path(), &["checkout", "main"]);
+        fs::write(directory.path().join("main-only.txt"), "main\n").expect("write main");
+        git(directory.path(), &["commit", "-am", "main"]);
+        let workspace = workspace(directory.path());
+
+        let branches = branch_list(&workspace).expect("branches");
+        assert_eq!(branches[0].name, "main");
+        assert!(branches.iter().any(|branch| branch.name == "feature_a"));
+
+        let page = branch_changes(&workspace, "main", "feature_a", 0, 20).expect("branch changes");
+        assert_eq!(page.comparison.base, "main");
+        assert_eq!(page.comparison.head, "feature_a");
+        assert_eq!(
+            page.changes
+                .iter()
+                .map(|change| change.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["feature.txt", "shared.txt"]
+        );
+        assert!(
+            !page
+                .changes
+                .iter()
+                .any(|change| change.path == "main-only.txt")
+        );
+
+        let comparison = branch_file(
+            &workspace,
+            &BranchCompareFileRequest {
+                workspace_id: workspace.id.clone(),
+                comparison: BranchComparison {
+                    base: page.comparison.base.clone(),
+                    head: page.comparison.head.clone(),
+                    base_oid: page.comparison.base_oid.clone(),
+                    head_oid: page.comparison.head_oid.clone(),
+                    merge_base_oid: page.comparison.merge_base_oid.clone(),
+                },
+                path: "shared.txt".to_owned(),
+            },
+        )
+        .expect("branch file");
+        assert!(matches!(
+            comparison,
+            FileComparison::Text {
+                baseline,
+                original,
+                modified,
+                ..
+            } if baseline == "main...feature_a"
+                && original == "base\n"
+                && modified == "feature\n"
+        ));
+
+        assert!(branch_changes(&workspace, "-not-a-branch", "feature_a", 0, 20).is_err());
+
+        git(directory.path(), &["checkout", "feature_a"]);
+        fs::write(directory.path().join("feature.txt"), "feature moved\n")
+            .expect("move feature branch");
+        git(directory.path(), &["commit", "-am", "move feature"]);
+        let stale = branch_file(
+            &workspace,
+            &BranchCompareFileRequest {
+                workspace_id: workspace.id.clone(),
+                comparison: BranchComparison {
+                    base: page.comparison.base,
+                    head: page.comparison.head,
+                    base_oid: page.comparison.base_oid,
+                    head_oid: page.comparison.head_oid,
+                    merge_base_oid: page.comparison.merge_base_oid,
+                },
+                path: "shared.txt".to_owned(),
+            },
+        )
+        .expect_err("stale branch comparison");
+        assert_eq!(
+            stale,
+            "Branch comparison changed; refresh before opening this file"
+        );
     }
 
     #[test]

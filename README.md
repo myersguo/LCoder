@@ -13,9 +13,12 @@ Monaco Editor, xterm.js, and `portable-pty`.
 - Read UTF-8 source in Monaco.
 - Review the current `HEAD → working tree` change set.
 - Browse commit history and first-parent commit diffs.
+- Compare local branches with `base...head` semantics for feature-branch review.
 - Right-click a file or either side of a diff to explain or review selected
   code; with no selection, the action targets the exact entire file/version.
 - Run Shell, Codex, Claude Code, or TraeX in a real embedded PTY.
+- Keep AI sessions started by LCoder out of each Agent's default
+  Recent/resume list.
 - Refresh files and Git state when the workspace changes.
 - Keep browsing safe until the user explicitly trusts the workspace for command execution.
 
@@ -100,6 +103,10 @@ session stores.
 - In History, the commit list and changed-file tree have a persisted,
   keyboard-accessible horizontal resize handle.
 - Source text, diffs, terminal bytes, and AI messages are not persisted by LCoder.
+- Codex and TraeX session/SQLite state is written to a private disposable
+  LCoder directory while existing user config and authentication remain
+  available. Claude Code runs with interactive transcript persistence
+  disabled. LCoder never deletes or edits the user's existing Agent sessions.
 
 See [Architecture](docs/architecture.md), [Security](docs/security.md), and
 [Contributing](CONTRIBUTING.md) for more detail.

@@ -159,6 +159,8 @@ function sourceDescription(sourceRef: CodeSelection["sourceRef"]): string {
       return "HEAD version of this file";
     case "commit":
       return `file version in commit ${sourceRef.oid}`;
+    case "branch":
+      return `file version in branch ${sourceRef.branch} at commit ${sourceRef.oid}`;
     case "emptyTree":
       return "empty tree before the root commit";
   }

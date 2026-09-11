@@ -13,6 +13,9 @@ import {
   demoWorkspace
 } from "./demo-data";
 import type {
+  BranchChangePage,
+  BranchComparison,
+  BranchSummary,
   ChangePage,
   CommitPage,
   CommitSummary,
@@ -117,6 +120,65 @@ export async function readWorkingFile(
   return invoke("git_working_file", {
     request: {
       workspaceId,
+      path: change.path
+    }
+  });
+}
+
+export async function readBranches(workspaceId: string): Promise<BranchSummary[]> {
+  if (browserDemo) {
+    return [
+      { name: "feature/token-spans", current: true },
+      { name: "main", current: false }
+    ];
+  }
+  if (!desktop) throw new Error("Branch comparison requires the LCoder desktop app.");
+  return invoke("git_branches", { workspaceId });
+}
+
+export async function readBranchChanges(
+  workspaceId: string,
+  base: string,
+  head: string,
+  offset = 0,
+  limit = 500
+): Promise<BranchChangePage> {
+  if (browserDemo) {
+    return {
+      ...demoChanges,
+      comparison: {
+        base,
+        head,
+        baseOid: "729f212913a632bbb6771240aa1c50ef65a9f877",
+        headOid: "84a1fc87641dd43bd78d604327ace54193fdac41",
+        mergeBaseOid: "729f212913a632bbb6771240aa1c50ef65a9f877"
+      }
+    };
+  }
+  if (!desktop) throw new Error("Branch comparison requires the LCoder desktop app.");
+  return invoke("git_branch_changes", {
+    request: { workspaceId, base, head, offset, limit }
+  });
+}
+
+export async function readBranchFile(
+  workspaceId: string,
+  comparison: BranchComparison,
+  change: GitChange
+): Promise<FileComparison> {
+  if (browserDemo) {
+    return {
+      ...demoWorkingComparison(change.path),
+      baseline: `${comparison.base}...${comparison.head}`
+    };
+  }
+  if (!desktop) {
+    throw new Error("Branch comparison requires the LCoder desktop app.");
+  }
+  return invoke("git_branch_file", {
+    request: {
+      workspaceId,
+      comparison,
       path: change.path
     }
   });

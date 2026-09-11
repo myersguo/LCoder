@@ -17,15 +17,23 @@ import {
 
 import {
   listDirectory,
+  readBranchChanges,
+  readBranches,
   readCommitChanges,
   readHistory,
   readWorkingChanges,
   searchFiles
 } from "./api";
 import { resizePane } from "./layout";
-import { selectedBrowsePath, selectedReviewPath } from "./navigation-selection";
+import {
+  branchComparisonId,
+  selectedBrowsePath,
+  selectedReviewPath
+} from "./navigation-selection";
 import { buildChangeTree, filterChanges, type ChangeTreeNode } from "./tree";
 import type {
+  BranchComparison,
+  BranchSummary,
   CommitSummary,
   DirectoryEntry,
   DocumentTab,
@@ -448,10 +456,14 @@ function ReviewBrowser({
   NavigatorProps,
   "activeTab" | "onOpen" | "repository" | "revision" | "workspace"
 >) {
-  const [view, setView] = useState<"working" | "history">("working");
+  const [view, setView] = useState<"working" | "history" | "branches">("working");
   const [changes, setChanges] = useState<GitChange[]>([]);
   const [commits, setCommits] = useState<CommitSummary[]>([]);
+  const [branches, setBranches] = useState<BranchSummary[]>([]);
   const [selectedCommit, setSelectedCommit] = useState<CommitSummary | null>(null);
+  const [baseBranch, setBaseBranch] = useState("");
+  const [headBranch, setHeadBranch] = useState("");
+  const [branchComparison, setBranchComparison] = useState<BranchComparison | null>(null);
   const [historyNextOffset, setHistoryNextOffset] = useState<number | null>(null);
   const [changesNextOffset, setChangesNextOffset] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
@@ -470,13 +482,21 @@ function ReviewBrowser({
   );
   const filteredChanges = useMemo(() => filterChanges(changes, filter), [changes, filter]);
   const tree = useMemo(() => buildChangeTree(filteredChanges), [filteredChanges]);
-  const activePath = selectedReviewPath(
-    activeTab,
-    view,
-    selectedCommit?.oid ?? null
-  );
+  const activeBranchComparison =
+    branchComparison?.base === baseBranch && branchComparison.head === headBranch
+      ? branchComparison
+      : null;
+  const selectedReviewId =
+    view === "history"
+      ? selectedCommit?.oid ?? null
+      : view === "branches" && activeBranchComparison
+        ? branchComparisonId(activeBranchComparison)
+        : null;
+  const activePath = selectedReviewPath(activeTab, view, selectedReviewId);
   const historyContext = `${workspace.id}:${revision}:history`;
-  const changesContext = `${workspace.id}:${revision}:${view}:${selectedCommit?.oid ?? ""}`;
+  const branchKey = `${baseBranch}...${headBranch}`;
+  const changesContext = `${workspace.id}:${revision}:${view}:${selectedReviewId ?? branchKey}`;
+  const emptyMessage = reviewEmptyMessage(view, branches, baseBranch, headBranch, filter);
   const historyContextRef = useRef(historyContext);
   const changesContextRef = useRef(changesContext);
   historyContextRef.current = historyContext;
@@ -489,7 +509,10 @@ function ReviewBrowser({
   useEffect(() => {
     setLoadingHistoryPage(false);
     setLoadingChangesPage(false);
-  }, [changesContext, historyContext]);
+    if (view !== "branches") {
+      setBranchComparison(null);
+    }
+  }, [changesContext, historyContext, view]);
 
   useEffect(() => {
     const update = () => {
@@ -516,16 +539,30 @@ function ReviewBrowser({
               setChangesNextOffset(page.nextOffset);
             }
           })
-        : readHistory(workspace.id).then((page) => {
-            if (cancelled) return;
-            setCommits(page.commits);
-            setHistoryNextOffset(page.nextOffset);
-            setSelectedCommit((current) =>
-              page.commits.find((commit) => commit.oid === current?.oid) ??
-              page.commits[0] ??
-              null
-            );
-          });
+        : view === "history"
+          ? readHistory(workspace.id).then((page) => {
+              if (cancelled) return;
+              setCommits(page.commits);
+              setHistoryNextOffset(page.nextOffset);
+              setSelectedCommit((current) =>
+                page.commits.find((commit) => commit.oid === current?.oid) ??
+                page.commits[0] ??
+                null
+              );
+            })
+          : readBranches(workspace.id).then((items) => {
+              if (cancelled) return;
+              setBranches(items);
+              setBaseBranch((current) =>
+                items.some((branch) => branch.name === current) ? current : defaultBaseBranch(items)
+              );
+              setHeadBranch(
+                (current) =>
+                  items.some((branch) => branch.name === current)
+                    ? current
+                    : defaultHeadBranch(items, defaultBaseBranch(items))
+              );
+            });
     void request
       .catch((reason: unknown) => {
         if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason));
@@ -563,6 +600,40 @@ function ReviewBrowser({
     };
   }, [revision, selectedCommit, view, workspace.id]);
 
+  useEffect(() => {
+    if (view !== "branches") return;
+    if (branches.length < 2 || !baseBranch || !headBranch || baseBranch === headBranch) {
+      setLoading(false);
+      setChanges([]);
+      setChangesNextOffset(null);
+      setBranchComparison(null);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    setChanges([]);
+    setChangesNextOffset(null);
+    setBranchComparison(null);
+    void readBranchChanges(workspace.id, baseBranch, headBranch)
+      .then((page) => {
+        if (!cancelled) {
+          setChanges(page.changes);
+          setChangesNextOffset(page.nextOffset);
+          setBranchComparison(page.comparison);
+          setError(null);
+        }
+      })
+      .catch((reason: unknown) => {
+        if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [baseBranch, branches.length, headBranch, revision, view, workspace.id]);
+
   if (!repository?.isRepository) {
     return (
       <div className="navigator">
@@ -585,6 +656,9 @@ function ReviewBrowser({
         </button>
         <button className={view === "history" ? "selected" : ""} onClick={() => setView("history")} type="button">
           History
+        </button>
+        <button className={view === "branches" ? "selected" : ""} onClick={() => setView("branches")} type="button">
+          Branches
         </button>
       </div>
       <FileFilter value={filter} onChange={setFilter} />
@@ -646,17 +720,54 @@ function ReviewBrowser({
             ) : null}
           </div>
           <HorizontalResizeHandle
-              onChange={(delta) =>
-                setHistoryHeight((current) =>
-                  resizePane(current, delta, 120, maxHistoryHeight(windowHeight))
-                )
-              }
+            onChange={(delta) =>
+              setHistoryHeight((current) =>
+                resizePane(current, delta, 120, maxHistoryHeight(windowHeight))
+              )
+            }
           />
         </>
       ) : null}
 
+      {view === "branches" ? (
+        <div className="branch-compare" aria-label="Branch comparison">
+          {branches.length < 2 ? (
+            <span>At least two local branches are required.</span>
+          ) : (
+            <>
+              <label>
+                <span>BASE</span>
+                <select
+                  value={baseBranch}
+                  onChange={(event) => setBaseBranch(event.target.value)}
+                >
+                  {branches.map((branch) => (
+                    <option key={branch.name} value={branch.name}>
+                      {branch.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>HEAD</span>
+                <select
+                  value={headBranch}
+                  onChange={(event) => setHeadBranch(event.target.value)}
+                >
+                  {branches.map((branch) => (
+                    <option key={branch.name} value={branch.name}>
+                      {branch.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </>
+          )}
+        </div>
+      ) : null}
+
       <div className="changes-header">
-        <span>{view === "working" ? "WORKING TREE" : selectedCommit?.shortOid ?? "COMMIT"}</span>
+        <span>{reviewHeading(view, selectedCommit, activeBranchComparison, baseBranch, headBranch)}</span>
         <span>
           {filter.trim() ? `${filteredChanges.length} / ${changes.length}` : changes.length} FILES
         </span>
@@ -667,7 +778,7 @@ function ReviewBrowser({
         {!loading && !error && tree.length === 0 ? (
           <div className="navigator-empty compact">
             <RefreshCw size={18} />
-            <p>{filter.trim() ? "No matching changed files." : "No changes in this scope."}</p>
+            <p>{emptyMessage}</p>
           </div>
         ) : null}
         {tree.length ? (
@@ -680,7 +791,7 @@ function ReviewBrowser({
             height={
               view === "history"
                 ? Math.max(120, windowHeight - historyHeight - 171)
-                : windowHeight - 160
+                : windowHeight - (view === "branches" ? 254 : 160)
             }
             idAccessor="id"
             indent={15}
@@ -699,7 +810,7 @@ function ReviewBrowser({
                   title: node.data.name,
                   change
                 });
-              } else if (selectedCommit) {
+              } else if (view === "history" && selectedCommit) {
                 onOpen({
                   id: `commit:${selectedCommit.oid}:${change.path}`,
                   kind: "commitDiff",
@@ -707,6 +818,15 @@ function ReviewBrowser({
                   title: node.data.name,
                   change,
                   commit: selectedCommit
+                });
+              } else if (view === "branches" && activeBranchComparison) {
+                onOpen({
+                  id: `branch:${encodeURIComponent(branchComparisonId(activeBranchComparison))}:${change.path}`,
+                  kind: "branchDiff",
+                  path: change.path,
+                  title: node.data.name,
+                  change,
+                  comparison: activeBranchComparison
                 });
               }
             }}
@@ -733,13 +853,33 @@ function ReviewBrowser({
             onClick={() => {
               if (loadingChangesPage) return;
               const context = changesContextRef.current;
+              const expectedBranchComparisonId = activeBranchComparison
+                ? branchComparisonId(activeBranchComparison)
+                : null;
               setLoadingChangesPage(true);
               const request =
                 view === "working"
                   ? readWorkingChanges(workspace.id, changesNextOffset)
-                  : selectedCommit
+                  : view === "history" && selectedCommit
                     ? readCommitChanges(workspace.id, selectedCommit.oid, changesNextOffset)
-                    : Promise.resolve({ changes: [], nextOffset: null });
+                    : view === "branches" && activeBranchComparison
+                      ? readBranchChanges(
+                          workspace.id,
+                          activeBranchComparison.base,
+                          activeBranchComparison.head,
+                          changesNextOffset
+                        ).then((page) => {
+                          if (
+                            expectedBranchComparisonId &&
+                            branchComparisonId(page.comparison) !== expectedBranchComparisonId
+                          ) {
+                            throw new Error(
+                              "Branch comparison changed; refresh before loading more files."
+                            );
+                          }
+                          return page;
+                        })
+                      : Promise.resolve({ changes: [], nextOffset: null });
               void request
                 .then((page) => {
                   if (context !== changesContextRef.current) return;
@@ -765,6 +905,52 @@ function ReviewBrowser({
       </div>
     </div>
   );
+}
+
+function defaultBaseBranch(branches: BranchSummary[]): string {
+  return (
+    branches.find((branch) => branch.name === "main")?.name ??
+    branches.find((branch) => branch.name === "master")?.name ??
+    branches.find((branch) => !branch.current)?.name ??
+    branches[0]?.name ??
+    ""
+  );
+}
+
+function defaultHeadBranch(branches: BranchSummary[], base: string): string {
+  return (
+    branches.find((branch) => branch.current && branch.name !== base)?.name ??
+    branches.find((branch) => branch.name !== base)?.name ??
+    branches[0]?.name ??
+    ""
+  );
+}
+
+function reviewHeading(
+  view: "working" | "history" | "branches",
+  selectedCommit: CommitSummary | null,
+  branchComparison: BranchComparison | null,
+  baseBranch: string,
+  headBranch: string
+): string {
+  if (view === "working") return "WORKING TREE";
+  if (view === "history") return selectedCommit?.shortOid ?? "COMMIT";
+  return branchComparison
+    ? `${branchComparison.base}...${branchComparison.head}`
+    : `${baseBranch || "base"}...${headBranch || "head"}`;
+}
+
+function reviewEmptyMessage(
+  view: "working" | "history" | "branches",
+  branches: BranchSummary[],
+  baseBranch: string,
+  headBranch: string,
+  filter: string
+): string {
+  if (filter.trim()) return "No matching changed files.";
+  if (view === "branches" && branches.length < 2) return "At least two local branches are required.";
+  if (view === "branches" && baseBranch === headBranch) return "Choose two different branches.";
+  return "No changes in this scope.";
 }
 
 function CommitNodeRow({ node, style }: NodeRendererProps<CommitSummary>) {

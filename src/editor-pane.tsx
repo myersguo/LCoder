@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 
 import "./monaco-environment";
-import { readCommitFile, readFile, readWorkingFile } from "./api";
+import { readBranchFile, readCommitFile, readFile, readWorkingFile } from "./api";
 import {
   diffModelUri,
   disposeClosedModels,
@@ -242,9 +242,13 @@ export function EditorPane({
           ? readWorkingFile(workspace.id, tab.change).then((result) => {
               if (!cancelled) setComparison(result);
             })
-          : readCommitFile(workspace.id, tab.commit, tab.change).then((result) => {
-              if (!cancelled) setComparison(result);
-            });
+          : tab.kind === "commitDiff"
+            ? readCommitFile(workspace.id, tab.commit, tab.change).then((result) => {
+                if (!cancelled) setComparison(result);
+              })
+            : readBranchFile(workspace.id, tab.comparison, tab.change).then((result) => {
+                if (!cancelled) setComparison(result);
+              });
     void request
       .catch((reason: unknown) => {
         if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason));

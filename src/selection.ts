@@ -66,6 +66,26 @@ export function codeSourceContext(
       : { path: tab.path, sourceRef: { kind: "workingTree" } };
   }
 
+  if (tab.kind === "branchDiff") {
+    return side === "original"
+      ? {
+          path: originalPath,
+          sourceRef: {
+            kind: "branch",
+            branch: tab.comparison.base,
+            oid: tab.comparison.mergeBaseOid
+          }
+        }
+      : {
+          path: tab.path,
+          sourceRef: {
+            kind: "branch",
+            branch: tab.comparison.head,
+            oid: tab.comparison.headOid
+          }
+        };
+  }
+
   const firstParent = tab.commit.parentOids[0];
   return side === "original"
     ? {

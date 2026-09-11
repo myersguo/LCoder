@@ -76,6 +76,21 @@ describe("buildReviewPrompt", () => {
     expect(prompt).not.toContain('"code"');
   });
 
+  it("keeps branch comparison file versions explicit", () => {
+    const prompt = buildAiCodePrompt("review", {
+      ...selection,
+      scope: "file",
+      side: "modified",
+      sourceRef: { kind: "branch", branch: "feature_a", oid: "b".repeat(40) },
+      text: "",
+      startLine: 1,
+      endLine: 200
+    });
+
+    expect(prompt).toContain(`file version in branch feature_a at commit ${"b".repeat(40)}`);
+    expect(prompt).not.toContain('"code"');
+  });
+
   it("keeps explain as the default AI prompt behavior", () => {
     expect(buildAiCodePrompt("explain", selection)).toBe(buildExplainPrompt(selection));
   });

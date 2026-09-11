@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    fs,
+    env, fs,
     io::{Read, Write},
     path::{Path, PathBuf},
     sync::{
@@ -13,6 +13,7 @@ use std::{
 };
 
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
+use uuid::Uuid;
 
 use crate::{
     TerminalEvent, TerminalInfo, TerminalProfile,
@@ -25,6 +26,21 @@ const MAX_TERMINAL_SIZE: u16 = 1000;
 const OUTPUT_CHUNK_BYTES: usize = 8192;
 const OUTPUT_CREDIT_BYTES: usize = 1024 * 1024;
 const INPUT_QUEUE_MESSAGES: usize = 64;
+// ponytail: These fixed allowlists match the supported CLI state layouts.
+// Add a named entry only when a supported CLI moves required non-session state.
+const CODEX_SHARED_HOME_ENTRIES: &[&str] = &[
+    "config.toml",
+    "auth.json",
+    ".credentials.json",
+    "AGENTS.md",
+    "skills",
+    "plugins",
+    "rules",
+    "prompts",
+    "hooks",
+    "hooks.json",
+];
+const TRAEX_SHARED_CLI_ENTRIES: &[&str] = &["auth.json", ".credentials.json", "hooks", "rules"];
 
 type EventSink = Arc<dyn Fn(TerminalEvent) + Send + Sync + 'static>;
 
@@ -34,6 +50,23 @@ struct TerminalSession {
     master: Mutex<Option<Box<dyn MasterPty + Send>>>,
     output_credit: Arc<OutputCredit>,
     pid: Option<u32>,
+    _agent_state: Option<AgentSessionState>,
+}
+
+struct AgentSessionState {
+    path: PathBuf,
+}
+
+impl Drop for AgentSessionState {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+#[derive(Default)]
+struct AgentSourceHomes {
+    codex: Option<PathBuf>,
+    traex_cli: Option<PathBuf>,
 }
 
 struct OutputCredit {
@@ -88,6 +121,7 @@ struct TerminalInner {
     starting: Mutex<bool>,
     custom_paths: Mutex<HashMap<String, PathBuf>>,
     config_path: PathBuf,
+    agent_state_path: PathBuf,
 }
 
 #[derive(Clone)]
@@ -101,6 +135,10 @@ impl TerminalController {
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default();
+        let agent_state_path = config_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("agent-sessions");
         Self {
             inner: Arc::new(TerminalInner {
                 epoch: AtomicU64::new(0),
@@ -109,6 +147,7 @@ impl TerminalController {
                 starting: Mutex::new(false),
                 custom_paths: Mutex::new(custom_paths),
                 config_path,
+                agent_state_path,
             }),
         }
     }
@@ -213,6 +252,12 @@ impl TerminalController {
         command.env("TERM", "xterm-256color");
         command.env("COLORTERM", "truecolor");
         command.env("PATH", command_path());
+        let agent_state = configure_agent_command(
+            &mut command,
+            profile_id,
+            &self.inner.agent_state_path,
+            &AgentSourceHomes::current(),
+        )?;
         let mut child = pair
             .slave
             .spawn_command(command)
@@ -253,6 +298,7 @@ impl TerminalController {
             master: Mutex::new(Some(pair.master)),
             output_credit: Arc::clone(&output_credit),
             pid,
+            _agent_state: agent_state,
         });
         let mut sessions = self
             .inner
@@ -440,6 +486,130 @@ impl Drop for TerminalInner {
                 let _ = stop_session(&session);
             }
         }
+        let _ = fs::remove_dir_all(&self.agent_state_path);
+    }
+}
+
+impl AgentSourceHomes {
+    fn current() -> Self {
+        let home = env::var_os("HOME").map(PathBuf::from);
+        Self {
+            codex: env::var_os("CODEX_HOME")
+                .filter(|path| !path.is_empty())
+                .map(PathBuf::from)
+                .filter(|path| path.is_absolute())
+                .or_else(|| home.as_ref().map(|home| home.join(".codex"))),
+            traex_cli: env::var_os("TRAECLI_HOME")
+                .filter(|path| !path.is_empty())
+                .map(PathBuf::from)
+                .filter(|path| path.is_absolute())
+                .or_else(|| {
+                    env::var_os("TRAE_HOME")
+                        .filter(|path| !path.is_empty())
+                        .map(PathBuf::from)
+                        .filter(|path| path.is_absolute())
+                        .or_else(|| home.as_ref().map(|home| home.join(".trae")))
+                        .map(|home| home.join("cli"))
+                }),
+        }
+    }
+}
+
+fn configure_agent_command(
+    command: &mut CommandBuilder,
+    profile_id: &str,
+    state_root: &Path,
+    source_homes: &AgentSourceHomes,
+) -> Result<Option<AgentSessionState>, String> {
+    match profile_id {
+        "shell" => Ok(None),
+        "claude" => {
+            // Claude Code treats this environment variable as an interactive
+            // no-transcript mode. Its similarly named CLI flag is print-only.
+            command.env("CLAUDE_CODE_SKIP_PROMPT_HISTORY", "1");
+            Ok(None)
+        }
+        "codex" => {
+            // Interactive Codex/TraeX do not expose their runtime-only
+            // ephemeral switch on the public TUI CLI, so isolate their stores.
+            let state = create_isolated_agent_state(
+                state_root,
+                profile_id,
+                source_homes.codex.as_deref(),
+                CODEX_SHARED_HOME_ENTRIES,
+            )?;
+            command.env("CODEX_HOME", &state.path);
+            add_sqlite_home_override(command, &state.path)?;
+            if state.path.join("auth.json").exists() {
+                command.args(["-c", "cli_auth_credentials_store=\"file\""]);
+            }
+            Ok(Some(state))
+        }
+        "traex" => {
+            let state = create_isolated_agent_state(
+                state_root,
+                profile_id,
+                source_homes.traex_cli.as_deref(),
+                TRAEX_SHARED_CLI_ENTRIES,
+            )?;
+            command.env("TRAECLI_HOME", &state.path);
+            command.env("TRAE_SQLITE_HOME", &state.path);
+            add_sqlite_home_override(command, &state.path)?;
+            if state.path.join("auth.json").exists() {
+                command.args(["-c", "cli_auth_credentials_store=\"file\""]);
+            }
+            Ok(Some(state))
+        }
+        _ => Err("Unknown terminal profile".to_owned()),
+    }
+}
+
+fn add_sqlite_home_override(command: &mut CommandBuilder, path: &Path) -> Result<(), String> {
+    let value = serde_json::to_string(&path.to_string_lossy())
+        .map_err(|error| format!("Unable to isolate Agent session state: {error}"))?;
+    command.arg("-c");
+    command.arg(format!("sqlite_home={value}"));
+    Ok(())
+}
+
+fn create_isolated_agent_state(
+    state_root: &Path,
+    profile_id: &str,
+    source_home: Option<&Path>,
+    shared_entries: &[&str],
+) -> Result<AgentSessionState, String> {
+    fs::create_dir_all(state_root)
+        .map_err(|error| format!("Unable to prepare Agent session state: {error}"))?;
+    set_private_directory_permissions(state_root)?;
+    let path = state_root.join(format!("{profile_id}-{}", Uuid::new_v4()));
+    fs::create_dir(&path)
+        .map_err(|error| format!("Unable to prepare Agent session state: {error}"))?;
+    set_private_directory_permissions(&path)?;
+    let state = AgentSessionState { path };
+    if let Some(source_home) = source_home {
+        for entry in shared_entries {
+            let source = source_home.join(entry);
+            if fs::symlink_metadata(&source).is_ok() {
+                link_agent_entry(&source, &state.path.join(entry)).map_err(|error| {
+                    format!("Unable to prepare Agent session state for {profile_id}: {error}")
+                })?;
+            }
+        }
+    }
+    Ok(state)
+}
+
+#[cfg(unix)]
+fn link_agent_entry(source: &Path, target: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(source, target)
+}
+
+#[cfg(windows)]
+fn link_agent_entry(source: &Path, target: &Path) -> std::io::Result<()> {
+    if fs::metadata(source)?.is_dir() {
+        std::os::windows::fs::symlink_dir(source, target)
+    } else {
+        std::os::windows::fs::symlink_file(source, target)
     }
 }
 
@@ -569,8 +739,19 @@ fn set_private_permissions(path: &Path) -> Result<(), String> {
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(|error| error.to_string())
 }
 
+#[cfg(unix)]
+fn set_private_directory_permissions(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(|error| error.to_string())
+}
+
 #[cfg(not(unix))]
 fn set_private_permissions(_path: &Path) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_private_directory_permissions(_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
@@ -619,6 +800,141 @@ mod tests {
     fn rejects_unknown_profiles() {
         assert!(validate_profile("arbitrary").is_err());
         assert!(validate_profile("codex").is_ok());
+    }
+
+    #[test]
+    fn shell_profile_does_not_change_agent_state() {
+        let directory = tempdir().expect("tempdir");
+        let mut command = CommandBuilder::new("/bin/sh");
+        let state = configure_agent_command(
+            &mut command,
+            "shell",
+            directory.path(),
+            &AgentSourceHomes::default(),
+        )
+        .expect("configure shell");
+
+        assert!(state.is_none());
+        assert_eq!(command.get_argv().len(), 1);
+        assert!(command.get_env("CODEX_HOME").is_none());
+        assert!(command.get_env("TRAECLI_HOME").is_none());
+        assert!(command.get_env("CLAUDE_CODE_SKIP_PROMPT_HISTORY").is_none());
+    }
+
+    #[test]
+    fn claude_profile_disables_interactive_transcript_persistence() {
+        let directory = tempdir().expect("tempdir");
+        let mut command = CommandBuilder::new("claude");
+        let state = configure_agent_command(
+            &mut command,
+            "claude",
+            directory.path(),
+            &AgentSourceHomes::default(),
+        )
+        .expect("configure Claude");
+
+        assert!(state.is_none());
+        assert_eq!(command.get_argv().len(), 1);
+        assert_eq!(
+            command.get_env("CLAUDE_CODE_SKIP_PROMPT_HISTORY"),
+            Some(std::ffi::OsStr::new("1"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_profile_uses_disposable_state_with_shared_user_configuration() {
+        let directory = tempdir().expect("tempdir");
+        let source = directory.path().join("codex");
+        let state_root = directory.path().join("state");
+        fs::create_dir(&source).expect("source home");
+        fs::write(source.join("config.toml"), "model = \"test\"").expect("config");
+        fs::write(source.join("auth.json"), "{}").expect("auth");
+        fs::create_dir(source.join("skills")).expect("skills");
+        let mut command = CommandBuilder::new("codex");
+        let state = configure_agent_command(
+            &mut command,
+            "codex",
+            &state_root,
+            &AgentSourceHomes {
+                codex: Some(source.clone()),
+                traex_cli: None,
+            },
+        )
+        .expect("configure Codex")
+        .expect("isolated state");
+        let state_path = state.path.clone();
+
+        assert_eq!(command.get_env("CODEX_HOME"), Some(state_path.as_os_str()));
+        let expected_arguments = vec![
+            std::ffi::OsString::from("codex"),
+            std::ffi::OsString::from("-c"),
+            std::ffi::OsString::from(format!(
+                "sqlite_home={}",
+                serde_json::to_string(&state_path.to_string_lossy()).expect("path JSON")
+            )),
+            std::ffi::OsString::from("-c"),
+            std::ffi::OsString::from("cli_auth_credentials_store=\"file\""),
+        ];
+        assert_eq!(command.get_argv(), &expected_arguments);
+        assert_eq!(
+            fs::read_link(state_path.join("config.toml")).expect("config link"),
+            source.join("config.toml")
+        );
+        assert_eq!(
+            fs::read_link(state_path.join("skills")).expect("skills link"),
+            source.join("skills")
+        );
+        assert!(!state_path.join("sessions").exists());
+
+        drop(state);
+        assert!(!state_path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn traex_profile_isolates_only_cli_runtime_state() {
+        let directory = tempdir().expect("tempdir");
+        let source = directory.path().join("trae-cli");
+        let state_root = directory.path().join("state");
+        fs::create_dir(&source).expect("source home");
+        fs::write(source.join("auth.json"), "{}").expect("auth");
+        let mut command = CommandBuilder::new("traex");
+        let state = configure_agent_command(
+            &mut command,
+            "traex",
+            &state_root,
+            &AgentSourceHomes {
+                codex: None,
+                traex_cli: Some(source.clone()),
+            },
+        )
+        .expect("configure TraeX")
+        .expect("isolated state");
+        let state_path = state.path.clone();
+
+        assert_eq!(
+            command.get_env("TRAECLI_HOME"),
+            Some(state_path.as_os_str())
+        );
+        assert_eq!(
+            command.get_env("TRAE_SQLITE_HOME"),
+            Some(state_path.as_os_str())
+        );
+        assert_eq!(
+            fs::read_link(state_path.join("auth.json")).expect("auth link"),
+            source.join("auth.json")
+        );
+        assert_eq!(
+            command.get_argv().last(),
+            Some(&std::ffi::OsString::from(
+                "cli_auth_credentials_store=\"file\""
+            ))
+        );
+        assert!(!state_path.join("sessions").exists());
+
+        drop(state);
+        assert!(!state_path.exists());
     }
 
     #[test]
@@ -698,5 +1014,65 @@ mod tests {
         }
         assert!(String::from_utf8_lossy(&output).contains("lcoder-pty-ok"));
         assert!(exited);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn isolates_a_real_agent_process_from_its_source_home() {
+        let directory = tempdir().expect("tempdir");
+        let source_home = directory.path().join("source");
+        let state_root = directory.path().join("state");
+        let marker = directory.path().join("marker");
+        fs::create_dir(&source_home).expect("source home");
+        fs::write(source_home.join("auth.json"), "{}").expect("auth");
+        let script = directory.path().join("agent.sh");
+        fs::write(
+            &script,
+            "#!/bin/sh\n\
+             test \"$TRAECLI_HOME\" != \"$SOURCE_HOME\"\n\
+             test -L \"$TRAECLI_HOME/auth.json\"\n\
+             mkdir -p \"$TRAECLI_HOME/sessions\"\n\
+             : > \"$TRAECLI_HOME/sessions/lcoder-session\"\n\
+             : > \"$MARKER\"\n",
+        )
+        .expect("script");
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).expect("executable");
+        }
+        let mut command = CommandBuilder::new(&script);
+        command.env("SOURCE_HOME", &source_home);
+        command.env("MARKER", &marker);
+        let state = configure_agent_command(
+            &mut command,
+            "traex",
+            &state_root,
+            &AgentSourceHomes {
+                codex: None,
+                traex_cli: Some(source_home.clone()),
+            },
+        )
+        .expect("configure agent")
+        .expect("isolated state");
+        let state_path = state.path.clone();
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("pty");
+        let mut child = pair.slave.spawn_command(command).expect("start agent");
+        drop(pair.slave);
+
+        let status = child.wait().expect("wait for agent");
+        assert_eq!(status.exit_code(), 0);
+        assert!(marker.exists());
+        assert!(state_path.join("sessions/lcoder-session").exists());
+        assert!(!source_home.join("sessions").exists());
+
+        drop(state);
+        assert!(!state_path.exists());
     }
 }

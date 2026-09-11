@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { selectedBrowsePath, selectedReviewPath } from "./navigation-selection";
+import {
+  branchComparisonId,
+  selectedBrowsePath,
+  selectedReviewPath
+} from "./navigation-selection";
 import type { DocumentTab } from "./types";
 
 const workingTab: DocumentTab = {
@@ -32,6 +36,21 @@ const commitTab: DocumentTab = {
   }
 };
 
+const branchComparison = {
+  base: "main",
+  head: "feature",
+  baseOid: "base",
+  headOid: "head",
+  mergeBaseOid: "merge-base"
+};
+
+const branchTab: DocumentTab = {
+  ...workingTab,
+  id: "branch:main...feature:src/main.ts",
+  kind: "branchDiff",
+  comparison: branchComparison
+};
+
 describe("navigator active file projection", () => {
   it("highlights only ordinary files in Browse", () => {
     expect(
@@ -50,5 +69,9 @@ describe("navigator active file projection", () => {
     expect(selectedReviewPath(commitTab, "history", "abc")).toBe("src/main.ts");
     expect(selectedReviewPath(commitTab, "history", "other")).toBeNull();
     expect(selectedReviewPath(workingTab, "history", "abc")).toBeNull();
+    expect(selectedReviewPath(branchTab, "branches", branchComparisonId(branchComparison))).toBe(
+      "src/main.ts"
+    );
+    expect(selectedReviewPath(branchTab, "branches", "main...other")).toBeNull();
   });
 });

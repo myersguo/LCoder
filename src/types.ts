@@ -74,6 +74,25 @@ export interface ChangePage {
   nextOffset: number | null;
 }
 
+export interface BranchSummary {
+  name: string;
+  current: boolean;
+}
+
+export interface BranchComparison {
+  base: string;
+  head: string;
+  baseOid: string;
+  headOid: string;
+  mergeBaseOid: string;
+}
+
+export interface BranchChangePage {
+  changes: GitChange[];
+  nextOffset: number | null;
+  comparison: BranchComparison;
+}
+
 export interface CommitSummary {
   oid: string;
   shortOid: string;
@@ -136,6 +155,7 @@ export interface CodeSelection {
     | { kind: "workingTree" }
     | { kind: "head" }
     | { kind: "commit"; oid: string }
+    | { kind: "branch"; branch: string; oid: string }
     | { kind: "emptyTree" };
   startLine: number;
   endLine: number;
@@ -167,4 +187,12 @@ export type DocumentTab =
       title: string;
       change: GitChange;
       commit: CommitSummary;
+    }
+  | {
+      id: string;
+      kind: "branchDiff";
+      path: string;
+      title: string;
+      change: GitChange;
+      comparison: BranchComparison;
     };
