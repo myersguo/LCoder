@@ -944,6 +944,7 @@ mod tests {
             id: "test-workspace".to_owned(),
             root: fs::canonicalize(directory.path()).expect("canonical directory"),
             revision: Arc::new(AtomicU64::new(1)),
+            changed_paths: Arc::new(Mutex::new(std::collections::VecDeque::new())),
             _watcher: None,
             warning: None,
         };
@@ -965,6 +966,7 @@ mod tests {
             id: "test-workspace".to_owned(),
             root: fs::canonicalize(directory.path()).expect("canonical directory"),
             revision: Arc::new(AtomicU64::new(1)),
+            changed_paths: Arc::new(Mutex::new(std::collections::VecDeque::new())),
             _watcher: None,
             warning: None,
         };

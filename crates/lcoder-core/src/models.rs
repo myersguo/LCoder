@@ -71,6 +71,7 @@ pub enum FileView {
 pub struct WatchState {
     pub changed: bool,
     pub revision: u64,
+    pub changed_paths: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

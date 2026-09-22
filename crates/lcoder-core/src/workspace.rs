@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     fs::{self, File},
     io::Read,
     path::{Component, Path, PathBuf},
@@ -24,13 +24,21 @@ const MAX_FILE_SEARCH_SCAN_ENTRIES: usize = 100_000;
 const MAX_FILE_SEARCH_QUERY_BYTES: usize = 256;
 const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_RELATIVE_PATH_BYTES: usize = 32 * 1024;
+const MAX_WATCH_EVENTS: usize = 512;
 
 pub struct Workspace {
     pub id: String,
     pub root: PathBuf,
     pub(crate) revision: Arc<AtomicU64>,
+    pub(crate) changed_paths: Arc<Mutex<VecDeque<WatchChange>>>,
     pub(crate) _watcher: Option<RecommendedWatcher>,
     pub(crate) warning: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct WatchChange {
+    revision: u64,
+    path: Option<String>,
 }
 
 pub struct WorkspaceRegistry {
@@ -76,9 +84,35 @@ impl WorkspaceRegistry {
 
         let revision = Arc::new(AtomicU64::new(1));
         let event_revision = Arc::clone(&revision);
+        let changed_paths = Arc::new(Mutex::new(VecDeque::new()));
+        let event_changed_paths = Arc::clone(&changed_paths);
+        let event_root = root.clone();
         let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-            if event.is_ok() {
-                event_revision.fetch_add(1, Ordering::Relaxed);
+            let Ok(event) = event else {
+                return;
+            };
+            let revision = event_revision.fetch_add(1, Ordering::Relaxed) + 1;
+            let paths = event.paths;
+            if let Ok(mut changes) = event_changed_paths.lock() {
+                if paths.is_empty() {
+                    push_watch_change(
+                        &mut changes,
+                        WatchChange {
+                            revision,
+                            path: None,
+                        },
+                    );
+                } else {
+                    for path in paths {
+                        push_watch_change(
+                            &mut changes,
+                            WatchChange {
+                                revision,
+                                path: normalized_watch_path(&event_root, &path),
+                            },
+                        );
+                    }
+                }
             }
         })
         .and_then(|mut watcher| {
@@ -99,6 +133,7 @@ impl WorkspaceRegistry {
             id: Uuid::new_v4().to_string(),
             root: root.clone(),
             revision,
+            changed_paths,
             _watcher: watcher,
             warning,
         });
@@ -332,9 +367,15 @@ impl WorkspaceRegistry {
     pub fn watch(&self, id: &str, after_revision: u64) -> Result<WatchState, String> {
         let workspace = self.get(id)?;
         let revision = workspace.revision.load(Ordering::Relaxed);
+        let changed_paths = if revision > after_revision {
+            watch_changes_since(&workspace, after_revision)?
+        } else {
+            Some(Vec::new())
+        };
         Ok(WatchState {
             changed: revision > after_revision,
             revision,
+            changed_paths,
         })
     }
 
@@ -353,6 +394,55 @@ impl WorkspaceRegistry {
             warning: workspace.warning.clone(),
         })
     }
+}
+
+fn push_watch_change(changes: &mut VecDeque<WatchChange>, change: WatchChange) {
+    changes.push_back(change);
+    while changes.len() > MAX_WATCH_EVENTS {
+        changes.pop_front();
+    }
+}
+
+fn normalized_watch_path(root: &Path, path: &Path) -> Option<String> {
+    path.strip_prefix(root)
+        .ok()
+        .and_then(|relative| normalized_relative_text(relative).ok())
+        .and_then(|relative| {
+            if relative == ".git" || relative.starts_with(".git/") {
+                None
+            } else {
+                Some(relative)
+            }
+        })
+}
+
+fn watch_changes_since(
+    workspace: &Workspace,
+    after_revision: u64,
+) -> Result<Option<Vec<String>>, String> {
+    let changes = workspace
+        .changed_paths
+        .lock()
+        .map_err(|_| "Workspace watcher state is unavailable".to_owned())?;
+    if changes
+        .front()
+        .is_some_and(|change| change.revision > after_revision.saturating_add(1))
+    {
+        return Ok(None);
+    }
+    let mut paths = HashSet::new();
+    for change in changes
+        .iter()
+        .filter(|change| change.revision > after_revision)
+    {
+        let Some(path) = &change.path else {
+            return Ok(None);
+        };
+        paths.insert(path.clone());
+    }
+    let mut paths = paths.into_iter().collect::<Vec<_>>();
+    paths.sort();
+    Ok(Some(paths))
 }
 
 pub(crate) fn safe_relative_path(relative_path: &str) -> Result<PathBuf, String> {
@@ -596,5 +686,50 @@ mod tests {
                 .search_files(&summary.id, &"x".repeat(257))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn reports_changed_paths_since_revision() {
+        let directory = tempdir().expect("tempdir");
+        let workspace = Workspace {
+            id: "test".to_owned(),
+            root: fs::canonicalize(directory.path()).expect("canonical path"),
+            revision: Arc::new(AtomicU64::new(3)),
+            changed_paths: Arc::new(Mutex::new(VecDeque::from([
+                WatchChange {
+                    revision: 2,
+                    path: Some("src/a.rs".to_owned()),
+                },
+                WatchChange {
+                    revision: 3,
+                    path: Some("src/b.rs".to_owned()),
+                },
+                WatchChange {
+                    revision: 3,
+                    path: Some("src/a.rs".to_owned()),
+                },
+            ]))),
+            _watcher: None,
+            warning: None,
+        };
+
+        assert_eq!(
+            watch_changes_since(&workspace, 1).expect("changes"),
+            Some(vec!["src/a.rs".to_owned(), "src/b.rs".to_owned()])
+        );
+        assert_eq!(
+            watch_changes_since(&workspace, 2).expect("changes"),
+            Some(vec!["src/a.rs".to_owned(), "src/b.rs".to_owned()])
+        );
+
+        workspace
+            .changed_paths
+            .lock()
+            .expect("watch state")
+            .push_back(WatchChange {
+                revision: 4,
+                path: None,
+            });
+        assert_eq!(watch_changes_since(&workspace, 3).expect("changes"), None);
     }
 }

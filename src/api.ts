@@ -90,8 +90,8 @@ export async function watchWorkspace(
   workspaceId: string,
   afterRevision: number
 ): Promise<WatchState> {
-  if (browserDemo) return { changed: false, revision: afterRevision || 1 };
-  if (!desktop) return { changed: false, revision: afterRevision };
+  if (browserDemo) return { changed: false, revision: afterRevision || 1, changedPaths: [] };
+  if (!desktop) return { changed: false, revision: afterRevision, changedPaths: [] };
   return invoke("workspace_watch", { workspaceId, afterRevision });
 }
 

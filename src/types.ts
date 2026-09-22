@@ -39,6 +39,7 @@ export type FileView =
 export interface WatchState {
   changed: boolean;
   revision: number;
+  changedPaths: string[] | null;
 }
 
 export interface RepositorySummary {

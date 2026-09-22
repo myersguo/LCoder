@@ -911,6 +911,9 @@ mod tests {
             id: "test".to_owned(),
             root: fs::canonicalize(path).expect("canonical path"),
             revision,
+            changed_paths: std::sync::Arc::new(std::sync::Mutex::new(
+                std::collections::VecDeque::new(),
+            )),
             _watcher: Some(watcher),
             warning: None,
         }

@@ -43,6 +43,7 @@ export function App() {
   const [tabs, setTabs] = useState<DocumentTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
+  const [changedPaths, setChangedPaths] = useState<string[] | null>([]);
   const [error, setError] = useState<string | null>(null);
   const [leftWidth, setLeftWidth] = useState(
     () => Number(window.localStorage.getItem("lcoder.left-width")) || 240
@@ -110,7 +111,8 @@ export function App() {
         .then((state) => {
           if (stopped || !state.changed) return;
           revisionRef.current = state.revision;
-          setRevision(state.revision);
+          setChangedPaths(state.changedPaths);
+          setRevision((current) => current + 1);
         })
         .catch(() => undefined);
     }, 800);
@@ -143,6 +145,7 @@ export function App() {
       setActiveTabId(null);
       setAiCodeRequest(null);
       revisionRef.current = 0;
+      setChangedPaths([]);
       setRevision(0);
       setError(null);
       setCompactTerminalOpen(false);
@@ -173,9 +176,8 @@ export function App() {
   );
 
   const refresh = () => {
-    const next = revisionRef.current + 1;
-    revisionRef.current = next;
-    setRevision(next);
+    setChangedPaths(null);
+    setRevision((current) => current + 1);
   };
 
   const requestAiAction = useCallback((action: AiCodeAction, selection: CodeSelection) => {
@@ -329,6 +331,7 @@ export function App() {
               onActivate={setActiveTabId}
               onClose={closeTab}
               onAiAction={requestAiAction}
+              changedPaths={changedPaths}
               revision={revision}
               tabs={tabs}
               theme={theme}

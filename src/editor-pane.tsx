@@ -25,6 +25,7 @@ import {
   ensureFileModel,
   fileModelUri
 } from "./editor-models";
+import { shouldRefreshTabContent } from "./refresh-scope";
 import { entireFileRequest, readCodeSelection } from "./selection";
 import type {
   AiCodeAction,
@@ -37,6 +38,7 @@ import type {
 
 interface EditorPaneProps {
   activeTabId: string | null;
+  changedPaths: string[] | null;
   onActivate: (id: string) => void;
   onAiAction: (action: AiCodeAction, selection: CodeSelection) => void;
   onClose: (id: string) => void;
@@ -64,6 +66,7 @@ const editorOptions = {
 
 export function EditorPane({
   activeTabId,
+  changedPaths,
   onActivate,
   onAiAction,
   onClose,
@@ -90,6 +93,7 @@ export function EditorPane({
     y: number;
     request: CodeSelection;
   } | null>(null);
+  const [refreshToken, setRefreshToken] = useState(0);
   const selectionSubscriptions = useRef<{ dispose: () => void }[]>([]);
   const previousWorkspaceId = useRef<string | null>(null);
   const language = useMemo(() => languageForPath(tab?.path ?? ""), [tab?.path]);
@@ -227,6 +231,12 @@ export function EditorPane({
   }, [contextMenu]);
 
   useEffect(() => {
+    if (revision > 0 && shouldRefreshTabContent(tab, changedPaths)) {
+      setRefreshToken(revision);
+    }
+  }, [changedPaths, revision, tab]);
+
+  useEffect(() => {
     setFile(null);
     setComparison(null);
     setError(null);
@@ -259,7 +269,7 @@ export function EditorPane({
     return () => {
       cancelled = true;
     };
-  }, [revision, tab, workspace]);
+  }, [refreshToken, tab, workspace]);
 
   useEffect(() => {
     const workspaceId = workspace?.id ?? null;
