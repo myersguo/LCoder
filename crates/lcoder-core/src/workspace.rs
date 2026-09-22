@@ -407,13 +407,7 @@ fn normalized_watch_path(root: &Path, path: &Path) -> Option<String> {
     path.strip_prefix(root)
         .ok()
         .and_then(|relative| normalized_relative_text(relative).ok())
-        .and_then(|relative| {
-            if relative == ".git" || relative.starts_with(".git/") {
-                None
-            } else {
-                Some(relative)
-            }
-        })
+        .filter(|relative| !(relative == ".git" || relative.starts_with(".git/")))
 }
 
 fn watch_changes_since(
